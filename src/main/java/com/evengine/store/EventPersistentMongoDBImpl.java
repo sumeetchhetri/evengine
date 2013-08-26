@@ -57,4 +57,14 @@ public class EventPersistentMongoDBImpl implements EventPersistenceInterface
     {
         return mongoTemplate.count(query, eventClass.getSimpleName());
     }
+
+    public boolean findDuplicateEvent(EventListenerSignature signature)
+    {
+        Query query = new Query(Criteria.where("event").is(signature.getEvent()));
+        List<EventListenerSignature> result = mongoTemplate.find(query, EventListenerSignature.class, 
+                signature.getEvent().getClass().getSimpleName());
+        if(result!=null && result.size()>0)
+            return true;
+        return false;
+    }
 }

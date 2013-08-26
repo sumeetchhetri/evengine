@@ -102,6 +102,18 @@ public class EventHandlerEngine
     }
     
     /**
+     * The Event Type 
+     * 
+     * @author Sumeet Chhetri<br/>
+     */
+    @Target(ElementType.TYPE)
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface EventType
+    {
+        boolean idempotent() default false;
+    }
+    
+    /**
      * The internal representation of an Event Listener Object
      * @author Sumeet Chhetri<br/>
      *
@@ -114,6 +126,11 @@ public class EventHandlerEngine
         boolean isThreadSafe;
         boolean addResponseEvent;
         ExecutorService eventListenerExecutors = null;
+    }
+    
+    private static class EventProperties
+    {
+        boolean idempotent;
     }
 
     private boolean initialized;
@@ -162,12 +179,22 @@ public class EventHandlerEngine
     }
 
     private Map<Class, List<EventListenerObject>> eventListenerMap = new HashMap<Class, List<EventListenerObject>>();
+    private Map<Class, EventProperties> eventPropertiesMap = new HashMap<Class, EventProperties>();
     
     private Map<EventListenerSignature, Boolean> eventMap;
     
     private ExecutorService executors = null;
     
     private ExecutorService internalExecutors = null;
+    
+    private boolean findDuplicate(EventListenerSignature signature)
+    {
+        if(isPersistent()) {
+            return ePersistenceInterface.findDuplicateEvent(signature);
+        } else {
+            return eventMap.containsKey(signature);
+        }
+    }
     
     private void storeEvent(EventListenerSignature signature)
     {
@@ -361,6 +388,17 @@ public class EventHandlerEngine
             Date startDate = new Date();
             for (Class eventClass : eventListenerMap.keySet())
             {
+                EventProperties eventProperties = new EventProperties();
+                if(eventClass.isAnnotationPresent(EventType.class))
+                {
+                    EventType evtType = (EventType)eventClass.getAnnotation(EventType.class);
+                    eventProperties.idempotent = evtType.idempotent();
+                    if(evtType.idempotent()) {
+                        logger.info("Event Type " + eventClass.getSimpleName() + " will generate idempotent requests to the event engine");
+                    }
+                }
+                eventPropertiesMap.put(eventClass, eventProperties);
+                
                 Query query = new Query(Criteria.where("isDone").is(false).
                         andOperator(Criteria.where("dispatchDate").lt(startDate)));
                 List<EventListenerSignature> events = null;
@@ -516,6 +554,12 @@ public class EventHandlerEngine
                             final Method oCallbackMeth = eventListenerObject.eventCallBackMethod;
                             
                             final EventListenerSignature signature = getSignature(event, index);
+                            
+                            if(eventPropertiesMap.get(eventClas).idempotent && findDuplicate(signature)) {
+                                logger.info("The event is marked as idempotent and a pending event alreay exists, hence skipping event....");
+                                break;
+                            }
+                            
                             storeEvent(signature);
                             
                             Callable<Object> callserve = new Callable<Object>() {

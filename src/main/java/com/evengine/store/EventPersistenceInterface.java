@@ -26,6 +26,7 @@ public interface EventPersistenceInterface
 {
     public void storeEvent(EventListenerSignature signature);
     public void removeEvent(EventListenerSignature signature);
+    public boolean findDuplicateEvent(EventListenerSignature signature);
     public List<EventListenerSignature> getEvents(Query query, Class eventClass);
     public long getEventsCount(Query query, Class eventClass);
 }
