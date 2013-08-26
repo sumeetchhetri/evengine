@@ -50,8 +50,9 @@ import com.evengine.store.EventPersistenceInterface;
  *    1. public no-args constructor 
  *    2. public method with single argument of the desired event type
  * the event types need to have
- *    1. must implement Serializable
- *    2. equals and hashcode methods for idempotency
+ *    1. public no-args constructor 
+ *    2. must implement Serializable
+ *    3. equals and hashcode methods
  * @author Sumeet Chhetri<br/>
  *
  */
@@ -273,6 +274,11 @@ public class EventHandlerEngine
         if(isPersistent()) {
         } else {
             eventMap = new ConcurrentHashMap<EventListenerSignature, Boolean>();
+        }
+        
+        if(isPersistent() && ePersistenceInterface == null) {
+            persistent = false;
+            logger.error("Could not find a valid instance of EventPersistenceInterface implementation, switching to non-persistent mode");
         }
         
         if(packagePaths != null)
