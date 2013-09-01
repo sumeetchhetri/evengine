@@ -20,15 +20,30 @@ import org.apache.log4j.Logger;
     See the License for the specific language governing permissions and
     limitations under the License.
 */
-public class ClearEventStatusHandler implements Runnable
+public class ClearEventStatusHandler
 {
     private static Logger logger = Logger.getLogger(ClearEventStatusHandler.class.getName());
     
     @SuppressWarnings("rawtypes")
     Future<List<Future>> futureoffs;
-    public void run()
+
+    @SuppressWarnings("rawtypes")
+    public List<Future> getFutures()
     {
-        getResults();
+        while(!futureoffs.isDone()) {
+            try {
+                Thread.sleep(1);
+            } catch (InterruptedException e) {
+                logger.error(e.getMessage());
+            }
+        }
+        List<Future> futures = new ArrayList<Future>();
+        try {
+            futures = futureoffs.get();
+        } catch (Exception e) {
+            logger.error(e.getMessage());
+        }
+        return futures;
     }
     
     public List<Object> getResults()

@@ -531,6 +531,21 @@ public class EventHandlerEngine
     }
     
     /**
+     * Push the desired event to the event Handler Engine and get back a list of Futures
+     * @param event
+     * @return
+     */
+    public List<Future> pushAndGetFutures(final Object event)
+    {
+        if(event != null) {
+            Class eventClas = event.getClass();
+            Future<List<Future>> futureoffs = push(eventClas, event);
+            return getClearStatusHandler(futureoffs).getFutures();
+        }
+        return null;
+    }
+    
+    /**
      * @param eventClas
      * @param event
      * @param isReturns
