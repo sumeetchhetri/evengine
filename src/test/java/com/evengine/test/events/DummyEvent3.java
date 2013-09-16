@@ -1,5 +1,6 @@
 package com.evengine.test.events;
 
+import java.io.Serializable;
 import java.math.BigInteger;
 import java.util.Map;
 
@@ -18,7 +19,7 @@ import java.util.Map;
     See the License for the specific language governing permissions and
     limitations under the License.
 */
-public class DummyEvent3
+public class DummyEvent3 implements Serializable
 {
     
     public DummyEvent3() {}
