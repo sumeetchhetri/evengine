@@ -1,5 +1,7 @@
 package com.evengine.test.events;
 
+import java.io.Serializable;
+
 /*
     Copyright 2013-2014, Sumeet Chhetri
     
@@ -15,7 +17,7 @@ package com.evengine.test.events;
     See the License for the specific language governing permissions and
     limitations under the License.
 */
-public class DummyEvent1
+public class DummyEvent1 implements Serializable
 {
 
     public DummyEvent1() {}

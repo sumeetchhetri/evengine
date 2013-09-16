@@ -2,6 +2,7 @@ package com.evengine.core;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Serializable;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -10,6 +11,8 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -99,6 +102,8 @@ public class EventHandlerEngine
     public @interface EventListenerCallBack
     {
         boolean addResponseEvent() default false;
+        int priority() default 0;
+        long delayNextPriorityListener() default 0;
     }
     
     /**
@@ -111,6 +116,7 @@ public class EventHandlerEngine
     public @interface EventType
     {
         boolean idempotent() default false;
+        boolean sequenceListenerPriority() default false;
     }
     
     /**
@@ -126,11 +132,15 @@ public class EventHandlerEngine
         boolean isThreadSafe;
         boolean addResponseEvent;
         ExecutorService eventListenerExecutors = null;
+        Integer priority;
+        Long delayNextPriorityListener;
     }
     
     private static class EventProperties
     {
         boolean idempotent;
+        boolean sequenceListenerPriority;
+        ExecutorService eventListenerExecutors = null;
     }
 
     private boolean initialized;
@@ -333,8 +343,6 @@ public class EventHandlerEngine
                         if(possEventListener != null && possEventListener.isAnnotationPresent(EventListener.class))
                         {
                             EventListener listannot = (EventListener)possEventListener.getAnnotation(EventListener.class);
-                            boolean isThreadSafe = listannot.threadSafe();
-                            int evListPoolSize = listannot.poolSize();
                             Method[] methods = possEventListener.getMethods();
                             boolean callbackFound = false;
                             for (Method possibleMethod : methods)
@@ -350,12 +358,14 @@ public class EventHandlerEngine
                                     EventListenerObject eventListenerObject = new EventListenerObject();
                                     eventListenerObject.eventListenerClass = possEventListener;
                                     eventListenerObject.eventCallBackMethod = callbackMethod;
-                                    eventListenerObject.isThreadSafe = isThreadSafe;
+                                    eventListenerObject.isThreadSafe = listannot.threadSafe();
                                     eventListenerObject.addResponseEvent = addResponseEvent;
-                                    if(evListPoolSize > 0) {
-                                        eventListenerObject.eventListenerExecutors = Executors.newFixedThreadPool(evListPoolSize);
+                                    eventListenerObject.priority = callbackanot.priority();
+                                    eventListenerObject.delayNextPriorityListener = callbackanot.delayNextPriorityListener();
+                                    if(listannot.poolSize() > 0) {
+                                        eventListenerObject.eventListenerExecutors = Executors.newFixedThreadPool(listannot.poolSize());
                                     }
-                                    if(isThreadSafe) {
+                                    if(listannot.threadSafe()) {
                                         try
                                         {
                                             eventListenerObject.eventListenerInstance = possEventListener.newInstance();
@@ -393,8 +403,12 @@ public class EventHandlerEngine
                 {
                     EventType evtType = (EventType)eventClass.getAnnotation(EventType.class);
                     eventProperties.idempotent = evtType.idempotent();
+                    eventProperties.sequenceListenerPriority = evtType.sequenceListenerPriority();
                     if(evtType.idempotent()) {
                         logger.info("Event Type " + eventClass.getSimpleName() + " will generate idempotent requests to the event engine");
+                    }
+                    if(evtType.sequenceListenerPriority()) {
+                        eventProperties.eventListenerExecutors = Executors.newFixedThreadPool(1);
                     }
                 }
                 eventPropertiesMap.put(eventClass, eventProperties);
@@ -451,6 +465,15 @@ public class EventHandlerEngine
                 }
             }
         }
+        
+        for (Map.Entry<Class, EventProperties> entry : eventPropertiesMap.entrySet())
+        {
+            EventProperties eventProperties = entry.getValue();
+            if(eventProperties.sequenceListenerPriority && eventProperties.eventListenerExecutors!=null)
+            {
+                eventProperties.eventListenerExecutors.shutdown();
+            }
+        }
     }
     
     /**
@@ -500,6 +523,12 @@ public class EventHandlerEngine
         } else {
             eventListenerMap.get(eventClas).add(eventListenerObject);
         }
+        Collections.sort(eventListenerMap.get(eventClas), new Comparator<EventListenerObject>() {
+            public int compare(EventListenerObject o1, EventListenerObject o2)
+            {
+                return o2.priority.compareTo(o1.priority);
+            }
+        });
     }
     
     
@@ -507,7 +536,7 @@ public class EventHandlerEngine
      * Push the desired event to the event Handler Engine.
      * @param event
      */
-    public void push(final Object event)
+    public <T extends Serializable> void push(final T event)
     {
         if(event != null) {
             Class eventClas = event.getClass();
@@ -520,7 +549,7 @@ public class EventHandlerEngine
      * @param event
      * @return
      */
-    public List<Object> pushAndGetResults(final Object event)
+    public <T extends Serializable> List<Object> pushAndGetResults(final T event)
     {
         if(event != null) {
             Class eventClas = event.getClass();
@@ -535,7 +564,7 @@ public class EventHandlerEngine
      * @param event
      * @return
      */
-    public List<Future> pushAndGetFutures(final Object event)
+    public <T extends Serializable> List<Future> pushAndGetFutures(final T event)
     {
         if(event != null) {
             Class eventClas = event.getClass();
@@ -610,7 +639,18 @@ public class EventHandlerEngine
                                 }
                             };
                             
-                            if(eventListenerObject.eventListenerExecutors != null)
+                            if(index+1<eventListeners.size()) {
+                                if(eventListenerObject.delayNextPriorityListener>0 && 
+                                        eventListenerObject.priority>eventListeners.get(index+1).priority) {
+                                    Thread.sleep(eventListenerObject.delayNextPriorityListener);
+                                }
+                            }
+                            
+                            if(eventPropertiesMap.get(eventClas)!=null && eventPropertiesMap.get(eventClas).eventListenerExecutors!=null) 
+                            {
+                                futures.add(eventPropertiesMap.get(eventClas).eventListenerExecutors.submit(callserve));
+                            }
+                            else if(eventListenerObject.eventListenerExecutors != null)
                             {
                                 futures.add(eventListenerObject.eventListenerExecutors.submit(callserve));
                             }

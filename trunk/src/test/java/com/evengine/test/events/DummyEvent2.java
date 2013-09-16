@@ -1,5 +1,6 @@
 package com.evengine.test.events;
 
+import java.io.Serializable;
 import java.util.List;
 
 /*
@@ -17,7 +18,7 @@ import java.util.List;
     See the License for the specific language governing permissions and
     limitations under the License.
 */
-public class DummyEvent2
+public class DummyEvent2 implements Serializable
 {
 
     public DummyEvent2() {}
