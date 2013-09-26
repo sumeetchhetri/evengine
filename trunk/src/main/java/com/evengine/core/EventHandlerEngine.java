@@ -290,7 +290,6 @@ public class EventHandlerEngine
      * Initialize the Event Engine default global thread pool if configured
      * Register all the event listeners found in the package path
      */
-    @SuppressWarnings("unchecked")
     public void initialize()
     {
         if(initialized)
@@ -340,52 +339,7 @@ public class EventHandlerEngine
                     }
                     for (Class possEventListener : classes)
                     {
-                        if(possEventListener != null && possEventListener.isAnnotationPresent(EventListener.class))
-                        {
-                            EventListener listannot = (EventListener)possEventListener.getAnnotation(EventListener.class);
-                            Method[] methods = possEventListener.getMethods();
-                            boolean callbackFound = false;
-                            for (Method possibleMethod : methods)
-                            {
-                                Method callbackMethod = getEventListenerCallback(possEventListener, possibleMethod);
-                                if(callbackMethod != null)
-                                {
-                                    callbackFound = true;
-                                    
-                                    EventListenerCallBack callbackanot = callbackMethod.getAnnotation(EventListenerCallBack.class);
-                                    boolean addResponseEvent = callbackanot.addResponseEvent();
-                                    
-                                    EventListenerObject eventListenerObject = new EventListenerObject();
-                                    eventListenerObject.eventListenerClass = possEventListener;
-                                    eventListenerObject.eventCallBackMethod = callbackMethod;
-                                    eventListenerObject.isThreadSafe = listannot.threadSafe();
-                                    eventListenerObject.addResponseEvent = addResponseEvent;
-                                    eventListenerObject.priority = callbackanot.priority();
-                                    eventListenerObject.delayNextPriorityListener = callbackanot.delayNextPriorityListener();
-                                    if(listannot.poolSize() > 0) {
-                                        eventListenerObject.eventListenerExecutors = Executors.newFixedThreadPool(listannot.poolSize());
-                                    }
-                                    if(listannot.threadSafe()) {
-                                        try
-                                        {
-                                            eventListenerObject.eventListenerInstance = possEventListener.newInstance();
-                                        }
-                                        catch (InstantiationException e)
-                                        {
-                                            logger.error("No nullary constructor found..");
-                                        }
-                                        catch (IllegalAccessException e)
-                                        {
-                                            logger.error("IllegalAccessException " + e.getMessage());
-                                        }
-                                    }
-                                    registerEventListener(callbackMethod.getParameterTypes()[0], eventListenerObject);
-                                }
-                            }
-                            if(!callbackFound) {
-                                logger.error("No callback method found in the Listener.. skipping EventListener..." + possEventListener.getSimpleName());
-                            }
-                        }
+                        registerListener(possEventListener);
                     }
                 } catch (ClassNotFoundException e){
                 } catch (IOException e) {
@@ -398,20 +352,7 @@ public class EventHandlerEngine
             Date startDate = new Date();
             for (Class eventClass : eventListenerMap.keySet())
             {
-                EventProperties eventProperties = new EventProperties();
-                if(eventClass.isAnnotationPresent(EventType.class))
-                {
-                    EventType evtType = (EventType)eventClass.getAnnotation(EventType.class);
-                    eventProperties.idempotent = evtType.idempotent();
-                    eventProperties.sequenceListenerPriority = evtType.sequenceListenerPriority();
-                    if(evtType.idempotent()) {
-                        logger.info("Event Type " + eventClass.getSimpleName() + " will generate idempotent requests to the event engine");
-                    }
-                    if(evtType.sequenceListenerPriority()) {
-                        eventProperties.eventListenerExecutors = Executors.newFixedThreadPool(1);
-                    }
-                }
-                eventPropertiesMap.put(eventClass, eventProperties);
+                registerEvent(eventClass);
                 
                 Query query = new Query(Criteria.where("isDone").is(false).
                         andOperator(Criteria.where("dispatchDate").lt(startDate)));
@@ -440,6 +381,84 @@ public class EventHandlerEngine
         }
         
         initialized = true;
+    }
+    
+    /**
+     * Register Event Listener
+     * @param possEventListener
+     */
+    @SuppressWarnings("unchecked")
+    public void registerListener(Class possEventListener)
+    {
+        if(possEventListener != null && possEventListener.isAnnotationPresent(EventListener.class))
+        {
+            EventListener listannot = (EventListener)possEventListener.getAnnotation(EventListener.class);
+            Method[] methods = possEventListener.getMethods();
+            boolean callbackFound = false;
+            for (Method possibleMethod : methods)
+            {
+                Method callbackMethod = getEventListenerCallback(possEventListener, possibleMethod);
+                if(callbackMethod != null)
+                {
+                    callbackFound = true;
+                    
+                    EventListenerCallBack callbackanot = callbackMethod.getAnnotation(EventListenerCallBack.class);
+                    boolean addResponseEvent = callbackanot.addResponseEvent();
+                    
+                    EventListenerObject eventListenerObject = new EventListenerObject();
+                    eventListenerObject.eventListenerClass = possEventListener;
+                    eventListenerObject.eventCallBackMethod = callbackMethod;
+                    eventListenerObject.isThreadSafe = listannot.threadSafe();
+                    eventListenerObject.addResponseEvent = addResponseEvent;
+                    eventListenerObject.priority = callbackanot.priority();
+                    eventListenerObject.delayNextPriorityListener = callbackanot.delayNextPriorityListener();
+                    if(listannot.poolSize() > 0) {
+                        eventListenerObject.eventListenerExecutors = Executors.newFixedThreadPool(listannot.poolSize());
+                    }
+                    if(listannot.threadSafe()) {
+                        try
+                        {
+                            eventListenerObject.eventListenerInstance = possEventListener.newInstance();
+                        }
+                        catch (InstantiationException e)
+                        {
+                            logger.error("No nullary constructor found..");
+                        }
+                        catch (IllegalAccessException e)
+                        {
+                            logger.error("IllegalAccessException " + e.getMessage());
+                        }
+                    }
+                    mapEventListener(callbackMethod.getParameterTypes()[0], eventListenerObject);
+                }
+            }
+            if(!callbackFound) {
+                logger.error("No callback method found in the Listener.. skipping EventListener..." + possEventListener.getSimpleName());
+            }
+        }
+    }
+    
+    /**
+     * Register Event class
+     * @param eventClass
+     */
+    @SuppressWarnings({ "unchecked" })
+    private void registerEvent(Class eventClass)
+    {
+        EventProperties eventProperties = new EventProperties();
+        if(eventClass.isAnnotationPresent(EventType.class))
+        {
+            EventType evtType = (EventType)eventClass.getAnnotation(EventType.class);
+            eventProperties.idempotent = evtType.idempotent();
+            eventProperties.sequenceListenerPriority = evtType.sequenceListenerPriority();
+            if(evtType.idempotent()) {
+                logger.info("Event Type " + eventClass.getSimpleName() + " will generate idempotent requests to the event engine");
+            }
+            if(evtType.sequenceListenerPriority()) {
+                eventProperties.eventListenerExecutors = Executors.newFixedThreadPool(1);
+            }
+        }
+        eventPropertiesMap.put(eventClass, eventProperties);
     }
     
     /**
@@ -514,7 +533,7 @@ public class EventHandlerEngine
      * @param eventClas
      * @param eventListenerObject
      */
-    private void registerEventListener(Class eventClas, EventListenerObject eventListenerObject)
+    private void mapEventListener(Class eventClas, EventListenerObject eventListenerObject)
     {
         if(eventListenerMap.get(eventClas) == null) {
             List<EventListenerObject> eventListenerObjects = new ArrayList<EventListenerObject>();
@@ -530,7 +549,6 @@ public class EventHandlerEngine
             }
         });
     }
-    
     
     /**
      * Push the desired event to the event Handler Engine.
