@@ -5,13 +5,13 @@ import java.util.Date;
 
 /*
     Copyright 2013-2014, Sumeet Chhetri
-    
+
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
     You may obtain a copy of the License at
-    
+
     http://www.apache.org/licenses/LICENSE-2.0
-    
+
     Unless required by applicable law or agreed to in writing, software
     distributed under the License is distributed on an "AS IS" BASIS,
     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,9 +26,9 @@ public class EventListenerSignature implements Serializable
     Object event;
     String listenerClassName;
     String listenerMethodName;
-    boolean isDone;
+    String status;
     Date dispatchDate;
-    Date proessedDate;
+    Date processedDate;
     String error;
     public String getId()
     {
@@ -47,10 +47,10 @@ public class EventListenerSignature implements Serializable
         result = prime * result + ((error == null) ? 0 : error.hashCode());
         result = prime * result + ((event == null) ? 0 : event.hashCode());
         result = prime * result + ((id == null) ? 0 : id.hashCode());
-        result = prime * result + (isDone ? 1231 : 1237);
         result = prime * result + ((listenerClassName == null) ? 0 : listenerClassName.hashCode());
         result = prime * result + ((listenerMethodName == null) ? 0 : listenerMethodName.hashCode());
-        result = prime * result + ((proessedDate == null) ? 0 : proessedDate.hashCode());
+        result = prime * result + ((processedDate == null) ? 0 : processedDate.hashCode());
+        result = prime * result + ((status == null) ? 0 : status.hashCode());
         return result;
     }
     @Override
@@ -91,8 +91,6 @@ public class EventListenerSignature implements Serializable
         }
         else if (!id.equals(other.id))
             return false;
-        if (isDone != other.isDone)
-            return false;
         if (listenerClassName == null)
         {
             if (other.listenerClassName != null)
@@ -107,14 +105,21 @@ public class EventListenerSignature implements Serializable
         }
         else if (!listenerMethodName.equals(other.listenerMethodName))
             return false;
-        if (proessedDate == null)
+        if (processedDate == null)
         {
-            if (other.proessedDate != null)
+            if (other.processedDate != null)
                 return false;
         }
-        else if (!proessedDate.equals(other.proessedDate))
+        else if (!processedDate.equals(other.processedDate))
+            return false;
+        if (status == null)
+        {
+            if (other.status != null)
+                return false;
+        }
+        else if (!status.equals(other.status))
             return false;
         return true;
     }
-    
+
 }

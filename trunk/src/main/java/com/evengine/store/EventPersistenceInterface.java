@@ -1,20 +1,19 @@
 package com.evengine.store;
 
+import java.util.Date;
 import java.util.List;
-
-import org.springframework.data.mongodb.core.query.Query;
 
 import com.evengine.core.EventListenerSignature;
 
 /*
     Copyright 2013-2014, Sumeet Chhetri
-    
+
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
     You may obtain a copy of the License at
-    
+
     http://www.apache.org/licenses/LICENSE-2.0
-    
+
     Unless required by applicable law or agreed to in writing, software
     distributed under the License is distributed on an "AS IS" BASIS,
     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,7 +25,7 @@ public interface EventPersistenceInterface
 {
     public void storeEvent(EventListenerSignature signature);
     public void removeEvent(EventListenerSignature signature);
-    public boolean findDuplicateEvent(EventListenerSignature signature);
-    public List<EventListenerSignature> getEvents(Query query, Class eventClass);
-    public long getEventsCount(Query query, Class eventClass);
+    public boolean findAndUpdateDuplicateEvents(EventListenerSignature signature, int expireTime);
+    public List<EventListenerSignature> getEvents(Class eventClass, Date startDate, int expireTime, int limit);
+    public long getEventsCount(Class eventClass, Date startDate, int expireTime);
 }
