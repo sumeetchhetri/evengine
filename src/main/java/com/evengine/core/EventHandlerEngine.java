@@ -27,19 +27,18 @@ import org.apache.log4j.Logger;
 
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.context.ApplicationContext;
 import com.evengine.store.EventPersistenceInterface;
 
 /*
     Copyright 2013-2014, Sumeet Chhetri
-    
+
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.
     You may obtain a copy of the License at
-    
+
     http://www.apache.org/licenses/LICENSE-2.0
-    
+
     Unless required by applicable law or agreed to in writing, software
     distributed under the License is distributed on an "AS IS" BASIS,
     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -48,12 +47,12 @@ import com.evengine.store.EventPersistenceInterface;
 */
 /**
  * The Event Handler Engine, registers listeners using annotation markers
- * EventListener and EventListenerCallBack, 
+ * EventListener and EventListenerCallBack,
  * the desired listener needs to have
- *    1. public no-args constructor 
+ *    1. public no-args constructor
  *    2. public method with single argument of the desired event type
  * the event types need to have
- *    1. public no-args constructor 
+ *    1. public no-args constructor
  *    2. must implement Serializable
  *    3. equals and hashcode methods
  * @author Sumeet Chhetri<br/>
@@ -63,10 +62,29 @@ import com.evengine.store.EventPersistenceInterface;
 public class EventHandlerEngine
 {
     private static Logger logger = Logger.getLogger(EventHandlerEngine.class.getName());
-    
+
+    public static final String STATUS_PENDING = "PENDING";
+
+    public static final String STATUS_SUCCESS = "SUCCESS";
+
+    public static final String STATUS_FAILED = "FAILED";
+
+    public static final String STATUS_EXPIRED = "EXPIRED";
+
+    public static final String ID = "_id";
+
+    public static final String EVENT = "event";
+
+    public static final String STATUS = "status";
+
+    public static final String DISPATCH_DATE = "dispatchDate";
+
+
     @Autowired
+    private ApplicationContext appContext;
+
     private EventPersistenceInterface ePersistenceInterface;
-    
+
     public EventPersistenceInterface getePersistenceInterface()
     {
         return ePersistenceInterface;
@@ -79,7 +97,7 @@ public class EventHandlerEngine
 
     /**
      * The EventListener Marker to register Event Listeners
-     * 
+     *
      * @author Sumeet Chhetri<br/>
      * threadSafe - is the event Listener threadsafe
      * poolSize - the event listener thread pool size
@@ -91,10 +109,10 @@ public class EventHandlerEngine
         boolean threadSafe() default true;
         int poolSize() default 0;
     }
-    
+
     /**
      * The EventListener Callback method
-     * 
+     *
      * @author Sumeet Chhetri<br/>
      */
     @Target(ElementType.METHOD)
@@ -105,10 +123,10 @@ public class EventHandlerEngine
         int priority() default 0;
         long delayNextPriorityListener() default 0;
     }
-    
+
     /**
-     * The Event Type 
-     * 
+     * The Event Type
+     *
      * @author Sumeet Chhetri<br/>
      */
     @Target(ElementType.TYPE)
@@ -117,8 +135,9 @@ public class EventHandlerEngine
     {
         boolean idempotent() default false;
         boolean sequenceListenerPriority() default false;
+        int expireTime() default 0;
     }
-    
+
     /**
      * The internal representation of an Event Listener Object
      * @author Sumeet Chhetri<br/>
@@ -135,29 +154,30 @@ public class EventHandlerEngine
         Integer priority;
         Long delayNextPriorityListener;
     }
-    
+
     private static class EventProperties
     {
         boolean idempotent;
         boolean sequenceListenerPriority;
         ExecutorService eventListenerExecutors = null;
+        int expireTime;
     }
 
     private boolean initialized;
-    
+
     /**
      * The comma separated list of package paths/classes that need to be looked up for possible
      * Event Listener waiting to be registered
      */
     private String packagePaths;
-    
+
     /**
      * The Global Event thread pool size
      */
     private int poolSize;
-    
+
     private boolean persistent;
-    
+
     public boolean isPersistent()
     {
         return persistent;
@@ -190,26 +210,26 @@ public class EventHandlerEngine
 
     private Map<Class, List<EventListenerObject>> eventListenerMap = new HashMap<Class, List<EventListenerObject>>();
     private Map<Class, EventProperties> eventPropertiesMap = new HashMap<Class, EventProperties>();
-    
+
     private Map<EventListenerSignature, Boolean> eventMap;
-    
+
     private ExecutorService executors = null;
-    
+
     private ExecutorService internalExecutors = null;
-    
-    private boolean findDuplicate(EventListenerSignature signature)
+
+    private boolean findDuplicate(EventListenerSignature signature, int expireTime)
     {
         if(isPersistent()) {
-            return ePersistenceInterface.findDuplicateEvent(signature);
+            return ePersistenceInterface.findAndUpdateDuplicateEvents(signature, expireTime);
         } else {
             return eventMap.containsKey(signature);
         }
     }
-    
+
     private void storeEvent(EventListenerSignature signature)
     {
         signature.dispatchDate = new Date();
-        signature.isDone = false;
+        signature.status = STATUS_PENDING;
         signature.id = signature.event.getClass().getSimpleName() + System.nanoTime();
         if(isPersistent()) {
             ePersistenceInterface.storeEvent(signature);
@@ -217,21 +237,21 @@ public class EventHandlerEngine
             eventMap.put(signature, true);
         }
     }
-    
+
     private void markEventDone(EventListenerSignature signature)
     {
-        signature.isDone = true;
-        signature.proessedDate = new Date();
+        signature.status = signature.error==null?STATUS_SUCCESS:STATUS_FAILED;
+        signature.processedDate = new Date();
         if(isPersistent()) {
             ePersistenceInterface.storeEvent(signature);
         } else {
             eventMap.remove(signature);
         }
     }
-    
+
     /**
      * Find all possible classes for a given package name
-     * 
+     *
      * @param directory
      * @param packageName
      * @return
@@ -260,10 +280,10 @@ public class EventHandlerEngine
         }
         return classes;
     }
-    
+
     /**
      * Find all possible classes for a given package name
-     * 
+     *
      * @param packageName
      * @return
      * @throws ClassNotFoundException
@@ -285,7 +305,7 @@ public class EventHandlerEngine
         }
         return classes;
     }
-    
+
     /**
      * Initialize the Event Engine default global thread pool if configured
      * Register all the event listeners found in the package path
@@ -294,29 +314,29 @@ public class EventHandlerEngine
     {
         if(initialized)
             return;
-        
-        if(poolSize > 0) 
+
+        if(poolSize > 0)
         {
             executors = Executors.newFixedThreadPool(poolSize);
         }
-        
+
         if(executors == null && poolSize <=0 )
         {
             executors = Executors.newFixedThreadPool(50);
         }
-        
+
         internalExecutors = Executors.newFixedThreadPool(50);
-        
+
         if(isPersistent()) {
         } else {
             eventMap = new ConcurrentHashMap<EventListenerSignature, Boolean>();
         }
-        
+
         if(isPersistent() && ePersistenceInterface == null) {
             persistent = false;
             logger.error("Could not find a valid instance of EventPersistenceInterface implementation, switching to non-persistent mode");
         }
-        
+
         if(packagePaths != null)
         {
             String[] packages = packagePaths.split(",");
@@ -346,24 +366,22 @@ public class EventHandlerEngine
                 }
             }
         }
-        
+
         if(isPersistent() && eventListenerMap.size() > 0 ) {
             int size = 100;
             Date startDate = new Date();
             for (Class eventClass : eventListenerMap.keySet())
             {
                 registerEvent(eventClass);
-                
-                Query query = new Query(Criteria.where("isDone").is(false).
-                        andOperator(Criteria.where("dispatchDate").lt(startDate)));
+
+                int expiryTime = eventPropertiesMap.get(eventClass).expireTime;
                 List<EventListenerSignature> events = null;
-                long count = ePersistenceInterface.getEventsCount(query, eventClass);
+                long count = ePersistenceInterface.getEventsCount(eventClass, startDate, expiryTime);
                 if(count == 0)
                     continue;
                 if(size > count)
                     size = (int)count;
-                query.limit(size);
-                while ((events = ePersistenceInterface.getEvents(query, eventClass)) != null)
+                while ((events = ePersistenceInterface.getEvents(eventClass, startDate, expiryTime, size)) != null)
                 {
                     for (EventListenerSignature signature : events)
                     {
@@ -375,14 +393,13 @@ public class EventHandlerEngine
                         break;
                     if(size > count)
                         size = (int)count;
-                    query.limit(size);
                 }
             }
         }
-        
+
         initialized = true;
     }
-    
+
     /**
      * Register Event Listener
      * @param possEventListener
@@ -401,10 +418,10 @@ public class EventHandlerEngine
                 if(callbackMethod != null)
                 {
                     callbackFound = true;
-                    
+
                     EventListenerCallBack callbackanot = callbackMethod.getAnnotation(EventListenerCallBack.class);
                     boolean addResponseEvent = callbackanot.addResponseEvent();
-                    
+
                     EventListenerObject eventListenerObject = new EventListenerObject();
                     eventListenerObject.eventListenerClass = possEventListener;
                     eventListenerObject.eventCallBackMethod = callbackMethod;
@@ -415,21 +432,37 @@ public class EventHandlerEngine
                     if(listannot.poolSize() > 0) {
                         eventListenerObject.eventListenerExecutors = Executors.newFixedThreadPool(listannot.poolSize());
                     }
-                    if(listannot.threadSafe()) {
+                    boolean isSpringManaged = false;
+                    if(appContext!=null) {
+                        try {
+                            eventListenerObject.eventListenerInstance = appContext.getBean(possEventListener);
+                            isSpringManaged = true;
+                        } catch (Exception e) {
+                        }
+                    }
+                    if(eventListenerObject.eventListenerInstance==null && listannot.threadSafe())
+                    {
                         try
                         {
                             eventListenerObject.eventListenerInstance = possEventListener.newInstance();
                         }
                         catch (InstantiationException e)
                         {
-                            logger.error("No nullary constructor found..");
+                            logger.info("Could not register EventListener for " + possEventListener.getSimpleName()
+                                    + ", callback method " + callbackMethod.getName()
+                                    + ", reason = No nullary constructor found..");
                         }
                         catch (IllegalAccessException e)
                         {
-                            logger.error("IllegalAccessException " + e.getMessage());
+                            logger.info("Could not register EventListener for " + possEventListener.getSimpleName()
+                                    + ", callback method " + callbackMethod.getName()
+                                    + ", reason = IllegalAccessException ");
                         }
                     }
                     mapEventListener(callbackMethod.getParameterTypes()[0], eventListenerObject);
+                    logger.info("Registered EventListener for " + possEventListener.getSimpleName()
+                            + ", callback method " + callbackMethod.getName()
+                            + ", isSpringManaged = " + isSpringManaged);
                 }
             }
             if(!callbackFound) {
@@ -437,7 +470,7 @@ public class EventHandlerEngine
             }
         }
     }
-    
+
     /**
      * Register Event class
      * @param eventClass
@@ -452,15 +485,16 @@ public class EventHandlerEngine
             eventProperties.idempotent = evtType.idempotent();
             eventProperties.sequenceListenerPriority = evtType.sequenceListenerPriority();
             if(evtType.idempotent()) {
+                eventProperties.expireTime = evtType.expireTime();
                 logger.info("Event Type " + eventClass.getSimpleName() + " will generate idempotent requests to the event engine");
             }
-            if(evtType.sequenceListenerPriority()) {
+            if(eventProperties.sequenceListenerPriority) {
                 eventProperties.eventListenerExecutors = Executors.newFixedThreadPool(1);
             }
         }
         eventPropertiesMap.put(eventClass, eventProperties);
     }
-    
+
     /**
      * Clean up the global thread pool and the listener level thread pools
      */
@@ -469,11 +503,11 @@ public class EventHandlerEngine
         if(executors != null) {
             executors.shutdown();
         }
-        
+
         if(internalExecutors != null) {
             internalExecutors.shutdown();
         }
-        
+
         for (Map.Entry<Class, List<EventListenerObject>> entry : eventListenerMap.entrySet())
         {
             List<EventListenerObject> listeners = entry.getValue();
@@ -484,7 +518,7 @@ public class EventHandlerEngine
                 }
             }
         }
-        
+
         for (Map.Entry<Class, EventProperties> entry : eventPropertiesMap.entrySet())
         {
             EventProperties eventProperties = entry.getValue();
@@ -494,13 +528,14 @@ public class EventHandlerEngine
             }
         }
     }
-    
+
     /**
      * Get the Event listener callback method for the class provided
-     * 
+     *
      * @param possEventListener
      * @return
      */
+    @SuppressWarnings("unchecked")
     private Method getEventListenerCallback(Class possEventListener, Method possibleMethod)
     {
         if(possibleMethod.isAnnotationPresent(EventListenerCallBack.class))
@@ -516,8 +551,14 @@ public class EventHandlerEngine
                 return null;
             }
             try {
+                if(appContext!=null) {
+                    try {
+                        appContext.getBean(possEventListener);
+                        return possibleMethod;
+                    } catch (Exception e) {
+                    }
+                }
                 possEventListener.newInstance();
-                logger.info("Registering EventListener for " + possEventListener.getSimpleName() + " callback method " + possibleMethod.getName());
                 return possibleMethod;
             } catch (InstantiationException e) {
                 logger.error("No no-args constructor provided.. skipping EventListener..." + possEventListener.getSimpleName());
@@ -527,7 +568,7 @@ public class EventHandlerEngine
         }
         return null;
     }
-    
+
     /**
      * Add the Event Listener object for a given Event object
      * @param eventClas
@@ -549,7 +590,7 @@ public class EventHandlerEngine
             }
         });
     }
-    
+
     /**
      * Push the desired event to the event Handler Engine.
      * @param event
@@ -561,7 +602,7 @@ public class EventHandlerEngine
             push(eventClas, event);
         }
     }
-    
+
     /**
      * Push the desired event to the event Handler Engine and get back a list of final Result Objects
      * @param event
@@ -576,7 +617,7 @@ public class EventHandlerEngine
         }
         return null;
     }
-    
+
     /**
      * Push the desired event to the event Handler Engine and get back a list of Futures
      * @param event
@@ -591,7 +632,7 @@ public class EventHandlerEngine
         }
         return null;
     }
-    
+
     /**
      * @param eventClas
      * @param event
@@ -611,19 +652,30 @@ public class EventHandlerEngine
                         final EventListenerObject eventListenerObject = eventListeners.get(index);
                         try
                         {
-                            final Object oInstance = !eventListenerObject.isThreadSafe?eventListenerObject.eventListenerClass.newInstance()
-                                                        :eventListenerObject.eventListenerInstance;
+                            Object nfoInstance = null;
+                            if(eventListenerObject.eventListenerInstance==null && !eventListenerObject.isThreadSafe)
+                            {
+                                nfoInstance = eventListenerObject.eventListenerClass.newInstance();
+                            }
+                            else
+                            {
+                                nfoInstance = eventListenerObject.eventListenerInstance;
+                            }
+
+                            final Object oInstance = nfoInstance;
                             final Method oCallbackMeth = eventListenerObject.eventCallBackMethod;
-                            
+
                             final EventListenerSignature signature = getSignature(event, index);
-                            
-                            if(eventPropertiesMap.get(eventClas).idempotent && findDuplicate(signature)) {
+
+                            if(eventPropertiesMap.get(eventClas).idempotent &&
+                                    findDuplicate(signature, eventPropertiesMap.get(eventClas).expireTime))
+                            {
                                 logger.info("The event is marked as idempotent and a pending event alreay exists, hence skipping event....");
                                 break;
                             }
-                            
+
                             storeEvent(signature);
-                            
+
                             Callable<Object> callserve = new Callable<Object>() {
                                 public Object call() throws Exception
                                 {
@@ -656,15 +708,15 @@ public class EventHandlerEngine
                                     return result;
                                 }
                             };
-                            
+
                             if(index+1<eventListeners.size()) {
-                                if(eventListenerObject.delayNextPriorityListener>0 && 
+                                if(eventListenerObject.delayNextPriorityListener>0 &&
                                         eventListenerObject.priority>eventListeners.get(index+1).priority) {
                                     Thread.sleep(eventListenerObject.delayNextPriorityListener);
                                 }
                             }
-                            
-                            if(eventPropertiesMap.get(eventClas)!=null && eventPropertiesMap.get(eventClas).eventListenerExecutors!=null) 
+
+                            if(eventPropertiesMap.get(eventClas)!=null && eventPropertiesMap.get(eventClas).eventListenerExecutors!=null)
                             {
                                 futures.add(eventPropertiesMap.get(eventClas).eventListenerExecutors.submit(callserve));
                             }
@@ -672,7 +724,7 @@ public class EventHandlerEngine
                             {
                                 futures.add(eventListenerObject.eventListenerExecutors.submit(callserve));
                             }
-                            else if(executors != null) 
+                            else if(executors != null)
                             {
                                 futures.add(executors.submit(callserve));
                             }
@@ -690,10 +742,10 @@ public class EventHandlerEngine
                 return futures;
             }
         };
-        
+
         return internalExecutors.submit(mainpushcall);
     }
-    
+
     private EventListenerSignature getSignature(Object event, int index)
     {
         if(eventListenerMap.get(event.getClass()) != null) {
@@ -708,7 +760,7 @@ public class EventHandlerEngine
         }
         return null;
     }
-    
+
     private ClearEventStatusHandler getClearStatusHandler(Future<List<Future>> futureoffs)
     {
         ClearEventStatusHandler clStatusHandler = new ClearEventStatusHandler();
