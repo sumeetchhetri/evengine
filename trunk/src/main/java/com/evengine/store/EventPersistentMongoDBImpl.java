@@ -50,7 +50,7 @@ public class EventPersistentMongoDBImpl implements EventPersistenceInterface
     }
 
     @SuppressWarnings("rawtypes")
-    public List<EventListenerSignature> getEvents(Class eventClass, Date startDate, int expireTime, int limit)
+    public List<EventListenerSignature> getEvents(Class eventClass, Date startDate, boolean isDistributed, String instanceId, int expireTime, int limit)
     {
         Query query = null;
 
@@ -60,20 +60,32 @@ public class EventPersistentMongoDBImpl implements EventPersistenceInterface
             cal.setTime(startDate);
             cal.add(Calendar.SECOND, -expireTime);
 
-            query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
-                    andOperator(Criteria.where(DISPATCH_DATE).gt(startDate)));
+            if(!isDistributed)
+                query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)).
+                        andOperator(Criteria.where(DISPATCH_DATE).gt(startDate)));
+            else
+                query = new Query(Criteria.where(STATUS).is(STATUS_PARTIAL).
+                        andOperator(Criteria.where(DISPATCH_DATE).gt(startDate)).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)).
+                        andOperator(Criteria.where(INSTANCES).nin(instanceId)));
         }
         else
         {
-            query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
-                    andOperator(Criteria.where(DISPATCH_DATE).lt(startDate)));
+            if(!isDistributed)
+                query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)));
+            else
+                query = new Query(Criteria.where(STATUS).is(STATUS_PARTIAL).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)).
+                        andOperator(Criteria.where(INSTANCES).nin(instanceId)));
         }
         query.limit(limit);
         return mongoTemplate.find(query, EventListenerSignature.class, eventClass.getSimpleName());
     }
 
     @SuppressWarnings("rawtypes")
-    public long getEventsCount(Class eventClass, Date startDate, int expireTime)
+    public long getEventsCount(Class eventClass, Date startDate, boolean isDistributed, String instanceId, int expireTime)
     {
         Query query = null;
 
@@ -83,25 +95,39 @@ public class EventPersistentMongoDBImpl implements EventPersistenceInterface
             cal.setTime(startDate);
             cal.add(Calendar.SECOND, -expireTime);
 
-            query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
-                    andOperator(Criteria.where(DISPATCH_DATE).gt(startDate)));
+            if(!isDistributed)
+                query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)).
+                        andOperator(Criteria.where(DISPATCH_DATE).gt(startDate)));
+            else
+                query = new Query(Criteria.where(STATUS).is(STATUS_PARTIAL).
+                        andOperator(Criteria.where(DISPATCH_DATE).gt(startDate)).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)).
+                        andOperator(Criteria.where(INSTANCES).nin(instanceId)));
         }
         else
         {
-            query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
-                    andOperator(Criteria.where(DISPATCH_DATE).lt(startDate)));
+            if(!isDistributed)
+                query = new Query(Criteria.where(STATUS).is(STATUS_PENDING).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)));
+            else
+                query = new Query(Criteria.where(STATUS).is(STATUS_PARTIAL).
+                        andOperator(Criteria.where(DISTRIBUTED).is(isDistributed)).
+                        andOperator(Criteria.where(INSTANCES).nin(instanceId)));
         }
         return mongoTemplate.count(query, eventClass.getSimpleName());
     }
 
-    public boolean findAndUpdateDuplicateEvents(EventListenerSignature signature, int expireTime)
+    public boolean findDuplicateEvents(EventListenerSignature signature, int expireTime)
     {
         Query query = null;
         Calendar cal = Calendar.getInstance();
         if(expireTime<=0)
         {
             query = new Query(Criteria.where(EVENT).is(signature.getEvent())
-                .andOperator(Criteria.where(STATUS).is(STATUS_PENDING)));
+                .andOperator(Criteria.where(STATUS).in(STATUS_PENDING, STATUS_PARTIAL))
+                .andOperator(Criteria.where(LISTENER_CLASSNAME).is(signature.getListenerClassName()))
+                .andOperator(Criteria.where(LISTENER_METHNAME).is(signature.getListenerMethodName())));
         }
         else
         {
@@ -109,23 +135,67 @@ public class EventPersistentMongoDBImpl implements EventPersistenceInterface
             cal.add(Calendar.SECOND, -expireTime);
 
             query = new Query(Criteria.where(EVENT).is(signature.getEvent())
-                    .andOperator(Criteria.where(STATUS).is(STATUS_PENDING))
-                    .andOperator(Criteria.where(DISPATCH_DATE).gt(cal.getTime())));
+                    .andOperator(Criteria.where(STATUS).in(STATUS_PENDING, STATUS_PARTIAL))
+                    .andOperator(Criteria.where(DISPATCH_DATE).gt(cal.getTime()))
+                    .andOperator(Criteria.where(LISTENER_CLASSNAME).is(signature.getListenerClassName()))
+                    .andOperator(Criteria.where(LISTENER_METHNAME).is(signature.getListenerMethodName())));
         }
         EventListenerSignature result = mongoTemplate.findOne(query, EventListenerSignature.class,
                 signature.getEvent().getClass().getSimpleName());
-        if(expireTime>0)
-        {
-            query = new Query(Criteria.where(EVENT).is(signature.getEvent())
-                    .andOperator(Criteria.where(STATUS).is(STATUS_PENDING))
-                    .andOperator(Criteria.where(DISPATCH_DATE).lt(cal.getTime())));
-            Update update = new Update();
-            update.set(STATUS, STATUS_EXPIRED);
-
-            mongoTemplate.updateFirst(query, update, signature.getEvent().getClass().getSimpleName());
-        }
         if(result!=null)
             return true;
         return false;
+    }
+
+    public boolean lockEventStore(String instanceId)
+    {
+        Query query = new Query(Criteria.where(IS_LOCKED).is(true));
+        LockStatus status = mongoTemplate.findOne(query, LockStatus.class);
+        if((status!=null && !status.isLocked) || status==null)
+        {
+            if(status==null)
+            {
+                status = new LockStatus();
+            }
+            status.instanceId = instanceId;
+            status.isLocked = true;
+            mongoTemplate.save(status);
+            return true;
+        }
+        return false;
+    }
+
+    public boolean unLockEventStore(String instanceId)
+    {
+        Query query = new Query(Criteria.where(IS_LOCKED).is(true));
+        LockStatus status = mongoTemplate.findOne(query, LockStatus.class);
+        if(status!=null && status.isLocked)
+        {
+            status.instanceId = instanceId;
+            status.isLocked = false;
+            mongoTemplate.save(status);
+            return true;
+        }
+        return false;
+    }
+
+    public void expireEvents(String evtClsName, String evtcollName, int expireTime)
+    {
+        if(expireTime>0)
+        {
+            Calendar cal = Calendar.getInstance();
+            cal.setTime(new Date());
+            cal.add(Calendar.SECOND, -expireTime);
+
+            Query query = new Query(Criteria.where(EVENT_CLASSNAME).is(evtClsName)
+                    .andOperator(Criteria.where(STATUS).is(STATUS_PENDING))
+                    .andOperator(Criteria.where(DISTRIBUTED).is(false))
+                    .andOperator(Criteria.where(DISPATCH_DATE).lt(cal.getTime())));
+
+            Update update = new Update();
+            update.set(STATUS, STATUS_EXPIRED);
+
+            mongoTemplate.updateFirst(query, update, evtcollName);
+        }
     }
 }

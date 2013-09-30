@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<testsuite failures="0" time="24.525" errors="0" skipped="2" tests="6" name="com.evengine.test.TestEventEngine">
+<testsuite failures="0" time="65.404" errors="0" skipped="2" tests="6" name="com.evengine.test.TestEventEngine">
   <properties>
     <property name="java.runtime.name" value="Java(TM) SE Runtime Environment"/>
     <property name="sun.boot.library.path" value="C:\Program Files\Java\jdk1.6.0_31\jre\bin"/>
@@ -25,7 +25,7 @@
     <property name="java.vm.specification.vendor" value="Sun Microsystems Inc."/>
     <property name="user.variant" value=""/>
     <property name="os.name" value="Windows 7"/>
-    <property name="classworlds.conf" value="C:\Users\sumeetc\workspace\.metadata\.plugins\org.eclipse.m2e.launching\launches\m2conf9049499015020527706.tmp"/>
+    <property name="classworlds.conf" value="C:\Users\sumeetc\workspace\.metadata\.plugins\org.eclipse.m2e.launching\launches\m2conf8035588695300546070.tmp"/>
     <property name="sun.jnu.encoding" value="Cp1252"/>
     <property name="java.library.path" value="C:\Program Files\Java\jdk1.6.0_31\bin;C:\Windows\Sun\Java\bin;C:\Windows\system32;C:\Windows;C:\oraclexe\app\oracle\product\11.2.0\server\bin;C:\Program Files\Common Files\Microsoft Shared\Windows Live;C:\Program Files (x86)\Common Files\Microsoft Shared\Windows Live;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Program Files\ThinkPad\Bluetooth Software\;C:\Program Files\ThinkPad\Bluetooth Software\syswow64;C:\Program Files\Broadcom\WHL\;C:\Program Files\Broadcom\WHL\syswow64;C:\Program Files\Broadcom\WHL\SysWow64\;C:\Program Files\Broadcom\WHL\SysWow64\syswow64;C:\Program Files (x86)\Common Files\Lenovo;C:\Program Files (x86)\Common Files\Ulead Systems\MPEG;C:\Program Files\Common Files\Lenovo;C:\Program Files (x86)\Windows Live\Shared;C:\SWTOOLS\ReadyApps;C:\Program Files (x86)\Intel\Services\IPT\;C:\Program Files (x86)\Symantec\VIP Access Client\;C:\Program Files\SlikSvn\bin;C:\cygwin\bin;C:\Users\sumeetc\Development\maven\bin;C:\Program Files (x86)\wkhtmltopdf;c:\Program Files (x86)\Microsoft SQL Server\100\Tools\Binn\;c:\Program Files\Microsoft SQL Server\100\Tools\Binn\;c:\Program Files\Microsoft SQL Server\100\DTS\Binn\;C:\Program Files\nodejs\;C:\Program Files\OpenVPN\bin;C:\Program Files (x86)\QuickTime\QTSystem\;C:\Users\sumeetc\Development\apache-ant-1.9.0\bin;C:\Users\sumeetc\AppData\Roaming\npm;C:\Chocolatey\bin;;."/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
@@ -60,14 +60,14 @@
     <property name="sun.desktop" value="windows"/>
     <property name="sun.cpu.isalist" value="amd64"/>
   </properties>
-  <testcase time="2.022" classname="com.evengine.test.TestEventEngine" name="testWithoutPersistence"/>
-  <testcase time="2.004" classname="com.evengine.test.TestEventEngine" name="testWithoutPersistenceGetResults"/>
-  <testcase time="2.006" classname="com.evengine.test.TestEventEngine" name="testWithoutPersistencePerf">
+  <testcase time="12.204" classname="com.evengine.test.TestEventEngine" name="testWithoutPersistence"/>
+  <testcase time="12.006" classname="com.evengine.test.TestEventEngine" name="testWithoutPersistenceGetResults"/>
+  <testcase time="12.009" classname="com.evengine.test.TestEventEngine" name="testWithoutPersistencePerf">
     <skipped/>
   </testcase>
-  <testcase time="10.363" classname="com.evengine.test.TestEventEngine" name="testWithPersistence"/>
-  <testcase time="10.063" classname="com.evengine.test.TestEventEngine" name="testWithPersistenceGetResults"/>
-  <testcase time="10.063" classname="com.evengine.test.TestEventEngine" name="testWithPersistencePerf">
+  <testcase time="20.949" classname="com.evengine.test.TestEventEngine" name="testWithPersistence"/>
+  <testcase time="20.075" classname="com.evengine.test.TestEventEngine" name="testWithPersistenceGetResults"/>
+  <testcase time="20.075" classname="com.evengine.test.TestEventEngine" name="testWithPersistencePerf">
     <skipped/>
   </testcase>
 </testsuite>
