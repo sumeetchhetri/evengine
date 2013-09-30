@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.evengine.test.TestEventEngine
 -------------------------------------------------------------------------------
-Tests run: 6, Failures: 0, Errors: 0, Skipped: 2, Time elapsed: 24.525 sec
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 2, Time elapsed: 65.405 sec

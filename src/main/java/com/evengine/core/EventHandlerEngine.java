@@ -15,9 +15,9 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -71,6 +71,8 @@ public class EventHandlerEngine
 
     public static final String STATUS_EXPIRED = "EXPIRED";
 
+    public static final String STATUS_PARTIAL = "PARTIAL";
+
     public static final String ID = "_id";
 
     public static final String EVENT = "event";
@@ -79,6 +81,21 @@ public class EventHandlerEngine
 
     public static final String DISPATCH_DATE = "dispatchDate";
 
+    public static final String LISTENER_CLASSNAME = "listenerClassName";
+
+    public static final String LISTENER_METHNAME = "listenerMethodName";
+
+    public static final String IS_LOCKED = "isLocked";
+
+    public static final String INSTANCES = "instances";
+
+    public static final String DISTRIBUTED = "distributed";
+
+    public static final String EVENT_CLASSNAME = "eventClassName";
+
+    public static final String UNDER_SCORE = "_";
+
+    private static final String INSTANCE_ID = "INSTANCE_" + UUID.randomUUID();
 
     @Autowired
     private ApplicationContext appContext;
@@ -136,6 +153,7 @@ public class EventHandlerEngine
         boolean idempotent() default false;
         boolean sequenceListenerPriority() default false;
         int expireTime() default 0;
+        boolean distributed() default false;
     }
 
     /**
@@ -153,6 +171,14 @@ public class EventHandlerEngine
         ExecutorService eventListenerExecutors = null;
         Integer priority;
         Long delayNextPriorityListener;
+        @Override
+        public String toString()
+        {
+            return "EventListener [eventListenerClass=" + eventListenerClass + ", eventCallBackMethod="
+                    + eventCallBackMethod + ", isThreadSafe=" + isThreadSafe + ", addResponseEvent=" + addResponseEvent
+                    + ", priority=" + priority + ", delayNextPriorityListener=" + delayNextPriorityListener + "]";
+        }
+
     }
 
     private static class EventProperties
@@ -161,6 +187,14 @@ public class EventHandlerEngine
         boolean sequenceListenerPriority;
         ExecutorService eventListenerExecutors = null;
         int expireTime;
+        boolean isDistributed;
+        @Override
+        public String toString()
+        {
+            return "Event [idempotent=" + idempotent + ", sequenceListenerPriority="
+                    + sequenceListenerPriority + ", eventListenerExecutors=" + eventListenerExecutors + ", expireTime="
+                    + expireTime + ", isDistributed=" + isDistributed + "]";
+        }
     }
 
     private boolean initialized;
@@ -208,8 +242,9 @@ public class EventHandlerEngine
         this.packagePaths = packagePaths;
     }
 
-    private Map<Class, List<EventListenerObject>> eventListenerMap = new HashMap<Class, List<EventListenerObject>>();
-    private Map<Class, EventProperties> eventPropertiesMap = new HashMap<Class, EventProperties>();
+    private Map<Class, List<EventListenerObject>> eventListenerMap = new ConcurrentHashMap<Class, List<EventListenerObject>>();
+    private Map<Class, EventProperties> eventPropertiesMap = new ConcurrentHashMap<Class, EventProperties>();
+    private Map<String, Class> eventNameClassMap = new ConcurrentHashMap<String, Class>();
 
     private Map<EventListenerSignature, Boolean> eventMap;
 
@@ -217,12 +252,23 @@ public class EventHandlerEngine
 
     private ExecutorService internalExecutors = null;
 
+    private EventPollExpireHandler distributedEventHandler = null;
+
     private boolean findDuplicate(EventListenerSignature signature, int expireTime)
     {
         if(isPersistent()) {
-            return ePersistenceInterface.findAndUpdateDuplicateEvents(signature, expireTime);
+            return ePersistenceInterface.findDuplicateEvents(signature, expireTime);
         } else {
             return eventMap.containsKey(signature);
+        }
+    }
+
+    protected void expireEvents(String evtClsName)
+    {
+        if(isPersistent()) {
+            String evtcollName = eventNameClassMap.get(evtClsName).getSimpleName();
+            int expireTime = eventPropertiesMap.get(eventNameClassMap.get(evtClsName)).expireTime;
+            ePersistenceInterface.expireEvents(evtClsName, evtcollName, expireTime);
         }
     }
 
@@ -230,7 +276,7 @@ public class EventHandlerEngine
     {
         signature.dispatchDate = new Date();
         signature.status = STATUS_PENDING;
-        signature.id = signature.event.getClass().getSimpleName() + System.nanoTime();
+        signature.id = signature.event.getClass().getSimpleName() + UNDER_SCORE + System.nanoTime();
         if(isPersistent()) {
             ePersistenceInterface.storeEvent(signature);
         } else {
@@ -242,6 +288,10 @@ public class EventHandlerEngine
     {
         signature.status = signature.error==null?STATUS_SUCCESS:STATUS_FAILED;
         signature.processedDate = new Date();
+        signature.instances.add(INSTANCE_ID);
+        if(signature.isDistributed()) {
+            signature.status = STATUS_PARTIAL;
+        }
         if(isPersistent()) {
             ePersistenceInterface.storeEvent(signature);
         } else {
@@ -367,37 +417,62 @@ public class EventHandlerEngine
             }
         }
 
+        handleExistingEvents(false);
+
+        distributedEventHandler = new EventPollExpireHandler(this);
+        new Thread(distributedEventHandler).start();
+
+        initialized = true;
+
+        logger.info("Event Engine - Initialized...");
+    }
+
+
+    protected void handleExistingEvents(boolean isDistributed)
+    {
         if(isPersistent() && eventListenerMap.size() > 0 ) {
             int size = 100;
             Date startDate = new Date();
+
+            boolean lockStore = ePersistenceInterface.lockEventStore(INSTANCE_ID);
             for (Class eventClass : eventListenerMap.keySet())
             {
                 registerEvent(eventClass);
 
-                int expiryTime = eventPropertiesMap.get(eventClass).expireTime;
-                List<EventListenerSignature> events = null;
-                long count = ePersistenceInterface.getEventsCount(eventClass, startDate, expiryTime);
-                if(count == 0)
-                    continue;
-                if(size > count)
-                    size = (int)count;
-                while ((events = ePersistenceInterface.getEvents(eventClass, startDate, expiryTime, size)) != null)
+                if(lockStore)
                 {
-                    for (EventListenerSignature signature : events)
-                    {
-                        push(signature.event.getClass(), signature.event);
-                        ePersistenceInterface.removeEvent(signature);
-                    }
-                    count -= size;
-                    if(count <= 0)
-                        break;
+                    int expiryTime = eventPropertiesMap.get(eventClass).expireTime;
+                    List<EventListenerSignature> events = null;
+                    long count = ePersistenceInterface.getEventsCount(eventClass, startDate,
+                            isDistributed, INSTANCE_ID, expiryTime);
+                    if(count == 0)
+                        continue;
+
+                    logger.info("Got " + count + " events of type " + eventClass.getSimpleName() + ", processing....");
+
                     if(size > count)
                         size = (int)count;
+                    while ((events = ePersistenceInterface.getEvents(eventClass, startDate,
+                            isDistributed, INSTANCE_ID, expiryTime, size)) != null)
+                    {
+                        for (EventListenerSignature signature : events)
+                        {
+                            push(signature.event.getClass(), signature.event, signature);
+                            ePersistenceInterface.removeEvent(signature);
+                        }
+                        count -= size;
+                        if(count <= 0)
+                            break;
+                        if(size > count)
+                            size = (int)count;
+                    }
                 }
             }
+            if(lockStore)
+            {
+                ePersistenceInterface.unLockEventStore(INSTANCE_ID);
+            }
         }
-
-        initialized = true;
     }
 
     /**
@@ -448,21 +523,17 @@ public class EventHandlerEngine
                         }
                         catch (InstantiationException e)
                         {
-                            logger.info("Could not register EventListener for " + possEventListener.getSimpleName()
-                                    + ", callback method " + callbackMethod.getName()
+                            logger.info("Could not register " + eventListenerObject
                                     + ", reason = No nullary constructor found..");
                         }
                         catch (IllegalAccessException e)
                         {
-                            logger.info("Could not register EventListener for " + possEventListener.getSimpleName()
-                                    + ", callback method " + callbackMethod.getName()
+                            logger.info("Could not register " + eventListenerObject
                                     + ", reason = IllegalAccessException ");
                         }
                     }
                     mapEventListener(callbackMethod.getParameterTypes()[0], eventListenerObject);
-                    logger.info("Registered EventListener for " + possEventListener.getSimpleName()
-                            + ", callback method " + callbackMethod.getName()
-                            + ", isSpringManaged = " + isSpringManaged);
+                    logger.info("Registered " + eventListenerObject + ", isSpringManaged = " + isSpringManaged);
                 }
             }
             if(!callbackFound) {
@@ -484,15 +555,19 @@ public class EventHandlerEngine
             EventType evtType = (EventType)eventClass.getAnnotation(EventType.class);
             eventProperties.idempotent = evtType.idempotent();
             eventProperties.sequenceListenerPriority = evtType.sequenceListenerPriority();
-            if(evtType.idempotent()) {
-                eventProperties.expireTime = evtType.expireTime();
-                logger.info("Event Type " + eventClass.getSimpleName() + " will generate idempotent requests to the event engine");
+            eventProperties.isDistributed = evtType.distributed();
+            eventProperties.expireTime = evtType.expireTime();
+            if(evtType.distributed() && evtType.expireTime()<=0) {
+                logger.info("Event Type " + eventClass.getSimpleName() + " is of distributed type but does not define expireTime...skipping");
+                return;
             }
             if(eventProperties.sequenceListenerPriority) {
                 eventProperties.eventListenerExecutors = Executors.newFixedThreadPool(1);
             }
         }
+        logger.info("Registered " + eventProperties);
         eventPropertiesMap.put(eventClass, eventProperties);
+        eventNameClassMap.put(eventClass.getCanonicalName(), eventClass);
     }
 
     /**
@@ -527,6 +602,16 @@ public class EventHandlerEngine
                 eventProperties.eventListenerExecutors.shutdown();
             }
         }
+
+        initialized = false;
+        distributedEventHandler.done.set(false);
+
+        try {
+            Thread.sleep(10000);
+        } catch (InterruptedException e) {
+        }
+
+        logger.info("Event Engine - Destroyed...");
     }
 
     /**
@@ -599,7 +684,7 @@ public class EventHandlerEngine
     {
         if(event != null) {
             Class eventClas = event.getClass();
-            push(eventClas, event);
+            push(eventClas, event, null);
         }
     }
 
@@ -612,7 +697,7 @@ public class EventHandlerEngine
     {
         if(event != null) {
             Class eventClas = event.getClass();
-            Future<List<Future>> futureoffs = push(eventClas, event);
+            Future<List<Future>> futureoffs = push(eventClas, event, null);
             return getClearStatusHandler(futureoffs).getResults();
         }
         return null;
@@ -627,7 +712,7 @@ public class EventHandlerEngine
     {
         if(event != null) {
             Class eventClas = event.getClass();
-            Future<List<Future>> futureoffs = push(eventClas, event);
+            Future<List<Future>> futureoffs = push(eventClas, event, null);
             return getClearStatusHandler(futureoffs).getFutures();
         }
         return null;
@@ -639,7 +724,7 @@ public class EventHandlerEngine
      * @param isReturns
      * @return list of Future if we need to return results
      */
-    private Future<List<Future>> push(final Class eventClas, final Object event)
+    private Future<List<Future>> push(final Class eventClas, final Object event, final EventListenerSignature eventSig)
     {
         Callable<List<Future>> mainpushcall = new Callable<List<Future>>() {
             public List<Future> call() throws Exception
@@ -665,12 +750,17 @@ public class EventHandlerEngine
                             final Object oInstance = nfoInstance;
                             final Method oCallbackMeth = eventListenerObject.eventCallBackMethod;
 
-                            final EventListenerSignature signature = getSignature(event, index);
+                            final EventListenerSignature signature = eventSig!=null?eventSig:getSignature(event, index);
+
+                            if(eventPropertiesMap.get(eventClas).expireTime>0) {
+                                distributedEventHandler.addExpireEvent(eventClas.getCanonicalName());
+                            }
 
                             if(eventPropertiesMap.get(eventClas).idempotent &&
                                     findDuplicate(signature, eventPropertiesMap.get(eventClas).expireTime))
                             {
-                                logger.info("The event is marked as idempotent and a pending event alreay exists, hence skipping event....");
+                                logger.info("The event of type " + eventClas.getSimpleName() + " is marked as idempotent " +
+                                		"and a pending event alreay exists, hence skipping event....");
                                 break;
                             }
 
@@ -685,7 +775,7 @@ public class EventHandlerEngine
                                         result = oCallbackMeth.invoke(oInstance, new Object[]{event});
                                         if(!oCallbackMeth.getReturnType().equals(Void.class) && eventListenerObject.addResponseEvent)
                                         {
-                                            push(oCallbackMeth.getReturnType(), result);
+                                            push(oCallbackMeth.getReturnType(), result, null);
                                         }
                                     }
                                     catch (IllegalArgumentException e)
@@ -755,6 +845,8 @@ public class EventHandlerEngine
                 signature.event = event;
                 signature.listenerClassName = eventListeners.get(index).eventListenerClass.getSimpleName();
                 signature.listenerMethodName = eventListeners.get(index).eventCallBackMethod.getName();
+                signature.eventClassName = event.getClass().getCanonicalName();
+                signature.distributed = eventPropertiesMap.get(event.getClass()).isDistributed;
                 return signature;
             }
         }

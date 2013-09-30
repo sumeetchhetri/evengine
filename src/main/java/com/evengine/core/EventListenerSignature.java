@@ -1,7 +1,9 @@
 package com.evengine.core;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 
 /*
     Copyright 2013-2014, Sumeet Chhetri
@@ -24,12 +26,27 @@ public class EventListenerSignature implements Serializable
 {
     String id;
     Object event;
+    String eventClassName;
     String listenerClassName;
     String listenerMethodName;
     String status;
     Date dispatchDate;
     Date processedDate;
     String error;
+    boolean distributed;
+    List<String> instances = new ArrayList<String>();
+    public String getStatus()
+    {
+        return status;
+    }
+    public List<String> getInstances()
+    {
+        return instances;
+    }
+    public void setListenerClassName(String listenerClassName)
+    {
+        this.listenerClassName = listenerClassName;
+    }
     public String getId()
     {
         return id;
@@ -38,18 +55,45 @@ public class EventListenerSignature implements Serializable
     {
         return event;
     }
+    public String getListenerClassName()
+    {
+        return listenerClassName;
+    }
+    public String getListenerMethodName()
+    {
+        return listenerMethodName;
+    }
+    public String getEventClassName()
+    {
+        return eventClassName;
+    }
+    public Date getDispatchDate()
+    {
+        return dispatchDate;
+    }
+    public Date getProcessedDate()
+    {
+        return processedDate;
+    }
+    public String getError()
+    {
+        return error;
+    }
+    public boolean isDistributed()
+    {
+        return distributed;
+    }
     @Override
     public int hashCode()
     {
         final int prime = 31;
         int result = 1;
-        result = prime * result + ((dispatchDate == null) ? 0 : dispatchDate.hashCode());
-        result = prime * result + ((error == null) ? 0 : error.hashCode());
+        result = prime * result + (distributed ? 1231 : 1237);
         result = prime * result + ((event == null) ? 0 : event.hashCode());
-        result = prime * result + ((id == null) ? 0 : id.hashCode());
+        result = prime * result + ((eventClassName == null) ? 0 : eventClassName.hashCode());
+        result = prime * result + ((instances == null) ? 0 : instances.hashCode());
         result = prime * result + ((listenerClassName == null) ? 0 : listenerClassName.hashCode());
         result = prime * result + ((listenerMethodName == null) ? 0 : listenerMethodName.hashCode());
-        result = prime * result + ((processedDate == null) ? 0 : processedDate.hashCode());
         result = prime * result + ((status == null) ? 0 : status.hashCode());
         return result;
     }
@@ -63,19 +107,7 @@ public class EventListenerSignature implements Serializable
         if (getClass() != obj.getClass())
             return false;
         EventListenerSignature other = (EventListenerSignature) obj;
-        if (dispatchDate == null)
-        {
-            if (other.dispatchDate != null)
-                return false;
-        }
-        else if (!dispatchDate.equals(other.dispatchDate))
-            return false;
-        if (error == null)
-        {
-            if (other.error != null)
-                return false;
-        }
-        else if (!error.equals(other.error))
+        if (distributed != other.distributed)
             return false;
         if (event == null)
         {
@@ -84,12 +116,19 @@ public class EventListenerSignature implements Serializable
         }
         else if (!event.equals(other.event))
             return false;
-        if (id == null)
+        if (eventClassName == null)
         {
-            if (other.id != null)
+            if (other.eventClassName != null)
                 return false;
         }
-        else if (!id.equals(other.id))
+        else if (!eventClassName.equals(other.eventClassName))
+            return false;
+        if (instances == null)
+        {
+            if (other.instances != null)
+                return false;
+        }
+        else if (!instances.equals(other.instances))
             return false;
         if (listenerClassName == null)
         {
@@ -104,13 +143,6 @@ public class EventListenerSignature implements Serializable
                 return false;
         }
         else if (!listenerMethodName.equals(other.listenerMethodName))
-            return false;
-        if (processedDate == null)
-        {
-            if (other.processedDate != null)
-                return false;
-        }
-        else if (!processedDate.equals(other.processedDate))
             return false;
         if (status == null)
         {

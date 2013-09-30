@@ -23,9 +23,17 @@ import com.evengine.core.EventListenerSignature;
 @SuppressWarnings("rawtypes")
 public interface EventPersistenceInterface
 {
+    class LockStatus
+    {
+        boolean isLocked;
+        String instanceId;
+    }
+    public boolean lockEventStore(String instanceId);
+    public boolean unLockEventStore(String instanceId);
     public void storeEvent(EventListenerSignature signature);
     public void removeEvent(EventListenerSignature signature);
-    public boolean findAndUpdateDuplicateEvents(EventListenerSignature signature, int expireTime);
-    public List<EventListenerSignature> getEvents(Class eventClass, Date startDate, int expireTime, int limit);
-    public long getEventsCount(Class eventClass, Date startDate, int expireTime);
+    public boolean findDuplicateEvents(EventListenerSignature signature, int expireTime);
+    public List<EventListenerSignature> getEvents(Class eventClass, Date startDate, boolean isDistributed, String instanceId, int expireTime, int limit);
+    public long getEventsCount(Class eventClass, Date startDate, boolean isDistributed, String instanceId, int expireTime);
+    public void expireEvents(String evtClsName, String evtcollName, int expireTime);
 }
