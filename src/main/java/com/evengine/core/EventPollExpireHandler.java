@@ -1,6 +1,5 @@
 package com.evengine.core;
 
-import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 
@@ -33,20 +32,19 @@ public class EventPollExpireHandler implements Runnable
 
     private EventHandlerEngine eventEngine;
 
-    private ConcurrentSkipListSet<String> expireEventList;
-
     protected EventPollExpireHandler(EventHandlerEngine engine)
     {
-        expireEventList = new ConcurrentSkipListSet<String>();
         this.eventEngine = engine;
         done = new AtomicBoolean(true);
     }
 
-    protected void addExpireEvent(String eventClassName)
-    {
-        expireEventList.add(eventClassName);
-    }
-
+    /*
+     * Handles distributed event processing
+     * Expires events from the store
+     *
+     * (non-Javadoc)
+     * @see java.lang.Runnable#run()
+     */
     public void run()
     {
         while(done.get()) {
@@ -56,9 +54,8 @@ public class EventPollExpireHandler implements Runnable
             } catch (InterruptedException e) {
             }
 
-            String expireEvt = expireEventList.pollFirst();
-            if(expireEvt!=null) {
-                eventEngine.expireEvents(expireEvt);
+            if(eventEngine.isPrimary()) {
+                eventEngine.expireEvents(eventEngine.eventExpireClassMap);
                 try {
                     Thread.sleep(2000);
                 } catch (InterruptedException e) {

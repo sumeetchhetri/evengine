@@ -7,6 +7,7 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -47,14 +48,14 @@ import com.evengine.store.EventPersistenceInterface;
 */
 /**
  * The Event Handler Engine, registers listeners using annotation markers
- * EventListener and EventListenerCallBack,
- * the desired listener needs to have
- *    1. public no-args constructor
- *    2. public method with single argument of the desired event type
- * the event types need to have
- *    1. public no-args constructor
- *    2. must implement Serializable
- *    3. equals and hashcode methods
+ * EventListener and EventListenerCallBack,<br/>
+ * the desired listener needs to have<br/>
+ *    1. public no-args constructor<br/>
+ *    2. public method with single argument of the desired event type<br/>
+ * the event types need to have<br/>
+ *    1. public no-args constructor<br/>
+ *    2. must implement Serializable<br/>
+ *    3. equals and hashcode methods<br/>
  * @author Sumeet Chhetri<br/>
  *
  */
@@ -93,9 +94,11 @@ public class EventHandlerEngine
 
     public static final String EVENT_CLASSNAME = "eventClassName";
 
+    public static final String CAN_EXPIRE = "canExpire";
+
     public static final String UNDER_SCORE = "_";
 
-    private static final String INSTANCE_ID = "INSTANCE_" + UUID.randomUUID();
+    private String instanceId = "INSTANCE_" + UUID.randomUUID();
 
     @Autowired
     private ApplicationContext appContext;
@@ -116,8 +119,9 @@ public class EventHandlerEngine
      * The EventListener Marker to register Event Listeners
      *
      * @author Sumeet Chhetri<br/>
-     * threadSafe - is the event Listener threadsafe
-     * poolSize - the event listener thread pool size
+     * threadSafe - is the event Listener threadsafe<br/>
+     * poolSize - the event listener thread pool size<br/>
+     *
      */
     @Target(ElementType.TYPE)
     @Retention(RetentionPolicy.RUNTIME)
@@ -131,6 +135,10 @@ public class EventHandlerEngine
      * The EventListener Callback method
      *
      * @author Sumeet Chhetri<br/>
+     * addResponseEvent - add the response of the callback back to the event engine<br/>
+     * priority - define listener callback priority<br/>
+     * delayNextPriorityListener - delay the next priority listener callback by ms<br/>
+     *
      */
     @Target(ElementType.METHOD)
     @Retention(RetentionPolicy.RUNTIME)
@@ -145,6 +153,14 @@ public class EventHandlerEngine
      * The Event Type
      *
      * @author Sumeet Chhetri<br/>
+     * idempotent - is the event idempotent (pending duplicates not allowed)<br/>
+     * sequenceListenerPriority - do we want to sequence the callback execution<br/>
+     * expireTime - when does the pending event expire<br/>
+     * distributed - is the event distributed, participating nodes will all get this event and process it,
+     *               the expiryTime is mandatory in this case<br/>
+     * processOnce - if an event is distributed, process event only once (once the event is processed by a participating
+     *               node, no other nodes can process it)
+     *
      */
     @Target(ElementType.TYPE)
     @Retention(RetentionPolicy.RUNTIME)
@@ -154,6 +170,7 @@ public class EventHandlerEngine
         boolean sequenceListenerPriority() default false;
         int expireTime() default 0;
         boolean distributed() default false;
+        boolean processOnce() default false;
     }
 
     /**
@@ -181,6 +198,11 @@ public class EventHandlerEngine
 
     }
 
+    /**
+     * The event properties object
+     * @author Sumeet Chhetri<br/>
+     *
+     */
     private static class EventProperties
     {
         boolean idempotent;
@@ -188,12 +210,13 @@ public class EventHandlerEngine
         ExecutorService eventListenerExecutors = null;
         int expireTime;
         boolean isDistributed;
+        boolean isProcessOnce;
         @Override
         public String toString()
         {
-            return "Event [idempotent=" + idempotent + ", sequenceListenerPriority="
-                    + sequenceListenerPriority + ", eventListenerExecutors=" + eventListenerExecutors + ", expireTime="
-                    + expireTime + ", isDistributed=" + isDistributed + "]";
+            return "EventProperties [idempotent=" + idempotent + ", sequenceListenerPriority="
+                    + sequenceListenerPriority + ", expireTime=" + expireTime + ", isDistributed=" + isDistributed
+                    + ", isProcessOnce=" + isProcessOnce + "]";
         }
     }
 
@@ -242,9 +265,31 @@ public class EventHandlerEngine
         this.packagePaths = packagePaths;
     }
 
+    public String getInstanceId()
+    {
+        return instanceId;
+    }
+
+    public void setInstanceId(String instanceId)
+    {
+        this.instanceId = instanceId;
+    }
+
+    private boolean primary = true;
+
+    public boolean isPrimary()
+    {
+        return primary;
+    }
+
+    public void setPrimary(boolean primary)
+    {
+        this.primary = primary;
+    }
+
     private Map<Class, List<EventListenerObject>> eventListenerMap = new ConcurrentHashMap<Class, List<EventListenerObject>>();
     private Map<Class, EventProperties> eventPropertiesMap = new ConcurrentHashMap<Class, EventProperties>();
-    private Map<String, Class> eventNameClassMap = new ConcurrentHashMap<String, Class>();
+    protected Map<String, Integer> eventExpireClassMap = new ConcurrentHashMap<String, Integer>();
 
     private Map<EventListenerSignature, Boolean> eventMap;
 
@@ -254,48 +299,10 @@ public class EventHandlerEngine
 
     private EventPollExpireHandler distributedEventHandler = null;
 
-    private boolean findDuplicate(EventListenerSignature signature, int expireTime)
+    protected void expireEvents(Map<String, Integer> eventExpireMap)
     {
         if(isPersistent()) {
-            return ePersistenceInterface.findDuplicateEvents(signature, expireTime);
-        } else {
-            return eventMap.containsKey(signature);
-        }
-    }
-
-    protected void expireEvents(String evtClsName)
-    {
-        if(isPersistent()) {
-            String evtcollName = eventNameClassMap.get(evtClsName).getSimpleName();
-            int expireTime = eventPropertiesMap.get(eventNameClassMap.get(evtClsName)).expireTime;
-            ePersistenceInterface.expireEvents(evtClsName, evtcollName, expireTime);
-        }
-    }
-
-    private void storeEvent(EventListenerSignature signature)
-    {
-        signature.dispatchDate = new Date();
-        signature.status = STATUS_PENDING;
-        signature.id = signature.event.getClass().getSimpleName() + UNDER_SCORE + System.nanoTime();
-        if(isPersistent()) {
-            ePersistenceInterface.storeEvent(signature);
-        } else {
-            eventMap.put(signature, true);
-        }
-    }
-
-    private void markEventDone(EventListenerSignature signature)
-    {
-        signature.status = signature.error==null?STATUS_SUCCESS:STATUS_FAILED;
-        signature.processedDate = new Date();
-        signature.instances.add(INSTANCE_ID);
-        if(signature.isDistributed()) {
-            signature.status = STATUS_PARTIAL;
-        }
-        if(isPersistent()) {
-            ePersistenceInterface.storeEvent(signature);
-        } else {
-            eventMap.remove(signature);
+            ePersistenceInterface.expireEvents(eventExpireMap);
         }
     }
 
@@ -365,6 +372,11 @@ public class EventHandlerEngine
         if(initialized)
             return;
 
+        if(instanceId==null)
+        {
+            instanceId = "INSTANCE_" + UUID.randomUUID();
+        }
+
         if(poolSize > 0)
         {
             executors = Executors.newFixedThreadPool(poolSize);
@@ -417,6 +429,11 @@ public class EventHandlerEngine
             }
         }
 
+        for (Class eventClass : eventListenerMap.keySet())
+        {
+            registerEvent(eventClass);
+        }
+
         handleExistingEvents(false);
 
         distributedEventHandler = new EventPollExpireHandler(this);
@@ -428,51 +445,74 @@ public class EventHandlerEngine
     }
 
 
+    /**
+     * Handle the existing events and process them
+     * @param isDistributed
+     */
+    @SuppressWarnings("unchecked")
     protected void handleExistingEvents(boolean isDistributed)
     {
-        if(isPersistent() && eventListenerMap.size() > 0 ) {
+        if(isPersistent() && eventPropertiesMap.size() > 0 ) {
             int size = 100;
             Date startDate = new Date();
 
-            boolean lockStore = ePersistenceInterface.lockEventStore(INSTANCE_ID);
-            for (Class eventClass : eventListenerMap.keySet())
+            if(ePersistenceInterface.lockEventStore(instanceId))
             {
-                registerEvent(eventClass);
-
-                if(lockStore)
+                for (Class eventClass : eventPropertiesMap.keySet())
                 {
                     int expiryTime = eventPropertiesMap.get(eventClass).expireTime;
                     List<EventListenerSignature> events = null;
-                    long count = ePersistenceInterface.getEventsCount(eventClass, startDate,
-                            isDistributed, INSTANCE_ID, expiryTime);
-                    if(count == 0)
-                        continue;
 
-                    logger.info("Got " + count + " events of type " + eventClass.getSimpleName() + ", processing....");
-
-                    if(size > count)
-                        size = (int)count;
                     while ((events = ePersistenceInterface.getEvents(eventClass, startDate,
-                            isDistributed, INSTANCE_ID, expiryTime, size)) != null)
+                            isDistributed, instanceId, expiryTime, size)) != null)
                     {
+                        if(events.size()==0)
+                            break;
+
+                        logger.info("Got " + events.size() + " events of type " + eventClass.getSimpleName() + ", processing....");
+
                         for (EventListenerSignature signature : events)
                         {
-                            push(signature.event.getClass(), signature.event, signature);
-                            ePersistenceInterface.removeEvent(signature);
+                            if(signature.event instanceof Map)
+                            {
+                                signature.event = getEventObject((Map<String, Object>)signature.event, eventClass);
+                                push(null, null, signature);
+                                ePersistenceInterface.removeEvent(signature);
+                            }
                         }
-                        count -= size;
-                        if(count <= 0)
-                            break;
-                        if(size > count)
-                            size = (int)count;
                     }
                 }
-            }
-            if(lockStore)
-            {
-                ePersistenceInterface.unLockEventStore(INSTANCE_ID);
+                ePersistenceInterface.unLockEventStore(instanceId);
             }
         }
+    }
+
+    private Object getEventObject(Map<String, Object> propMap, Class eventClass)
+    {
+        Field[] fields = eventClass.getDeclaredFields();
+
+        Object eventObj = null;
+        try
+        {
+            eventObj = eventClass.newInstance();
+            for (Field field : fields)
+            {
+                field.setAccessible(true);
+                field.set(eventObj, propMap.get(field.getName()));
+            }
+        }
+        catch (InstantiationException e)
+        {
+            logger.info("Error creating object of type " + eventClass.getSimpleName()
+                    + ", reason = no nullary constructor found..");
+        }
+        catch (IllegalAccessException e)
+        {
+            logger.info("Error creating object of type " + eventClass.getSimpleName()
+                    + ", reason = IllegalAccessException ");
+        }
+
+        return eventObj;
     }
 
     /**
@@ -561,13 +601,16 @@ public class EventHandlerEngine
                 logger.info("Event Type " + eventClass.getSimpleName() + " is of distributed type but does not define expireTime...skipping");
                 return;
             }
+            if(evtType.distributed() && evtType.processOnce()) {
+                eventProperties.isProcessOnce = evtType.processOnce();
+            }
             if(eventProperties.sequenceListenerPriority) {
                 eventProperties.eventListenerExecutors = Executors.newFixedThreadPool(1);
             }
         }
         logger.info("Registered " + eventProperties);
         eventPropertiesMap.put(eventClass, eventProperties);
-        eventNameClassMap.put(eventClass.getCanonicalName(), eventClass);
+        eventExpireClassMap.put(eventClass.getCanonicalName(), eventProperties.expireTime);
     }
 
     /**
@@ -724,133 +767,10 @@ public class EventHandlerEngine
      * @param isReturns
      * @return list of Future if we need to return results
      */
-    private Future<List<Future>> push(final Class eventClas, final Object event, final EventListenerSignature eventSig)
+    private Future<List<Future>> push(final Class evtCls, final Object evObj, final EventListenerSignature eventSig)
     {
-        Callable<List<Future>> mainpushcall = new Callable<List<Future>>() {
-            public List<Future> call() throws Exception
-            {
-                List<Future> futures = new ArrayList<Future>();
-                if(eventListenerMap.get(eventClas) != null) {
-                    List<EventListenerObject> eventListeners = eventListenerMap.get(eventClas);
-                    for (int index = 0;index < eventListeners.size(); index++)
-                    {
-                        final EventListenerObject eventListenerObject = eventListeners.get(index);
-                        try
-                        {
-                            Object nfoInstance = null;
-                            if(eventListenerObject.eventListenerInstance==null && !eventListenerObject.isThreadSafe)
-                            {
-                                nfoInstance = eventListenerObject.eventListenerClass.newInstance();
-                            }
-                            else
-                            {
-                                nfoInstance = eventListenerObject.eventListenerInstance;
-                            }
-
-                            final Object oInstance = nfoInstance;
-                            final Method oCallbackMeth = eventListenerObject.eventCallBackMethod;
-
-                            final EventListenerSignature signature = eventSig!=null?eventSig:getSignature(event, index);
-
-                            if(eventPropertiesMap.get(eventClas).expireTime>0) {
-                                distributedEventHandler.addExpireEvent(eventClas.getCanonicalName());
-                            }
-
-                            if(eventPropertiesMap.get(eventClas).idempotent &&
-                                    findDuplicate(signature, eventPropertiesMap.get(eventClas).expireTime))
-                            {
-                                logger.info("The event of type " + eventClas.getSimpleName() + " is marked as idempotent " +
-                                		"and a pending event alreay exists, hence skipping event....");
-                                break;
-                            }
-
-                            storeEvent(signature);
-
-                            Callable<Object> callserve = new Callable<Object>() {
-                                public Object call() throws Exception
-                                {
-                                    Object result = null;
-                                    try
-                                    {
-                                        result = oCallbackMeth.invoke(oInstance, new Object[]{event});
-                                        if(!oCallbackMeth.getReturnType().equals(Void.class) && eventListenerObject.addResponseEvent)
-                                        {
-                                            push(oCallbackMeth.getReturnType(), result, null);
-                                        }
-                                    }
-                                    catch (IllegalArgumentException e)
-                                    {
-                                        signature.error = ExceptionUtils.getStackTrace(e);
-                                        logger.error("Invalid argument passed to method " + eventListenerObject.eventListenerClass.getSimpleName()
-                                                        + "." + oCallbackMeth.getName());
-                                    }
-                                    catch (IllegalAccessException e)
-                                    {
-                                        signature.error = ExceptionUtils.getStackTrace(e);
-                                        logger.error("IllegalAccessException " + e.getMessage());
-                                    }
-                                    catch (InvocationTargetException e)
-                                    {
-                                        signature.error = ExceptionUtils.getStackTrace(e);
-                                        logger.error("Got exception while invoking method " + e.getMessage());
-                                    }
-                                    markEventDone(signature);
-                                    return result;
-                                }
-                            };
-
-                            if(index+1<eventListeners.size()) {
-                                if(eventListenerObject.delayNextPriorityListener>0 &&
-                                        eventListenerObject.priority>eventListeners.get(index+1).priority) {
-                                    Thread.sleep(eventListenerObject.delayNextPriorityListener);
-                                }
-                            }
-
-                            if(eventPropertiesMap.get(eventClas)!=null && eventPropertiesMap.get(eventClas).eventListenerExecutors!=null)
-                            {
-                                futures.add(eventPropertiesMap.get(eventClas).eventListenerExecutors.submit(callserve));
-                            }
-                            else if(eventListenerObject.eventListenerExecutors != null)
-                            {
-                                futures.add(eventListenerObject.eventListenerExecutors.submit(callserve));
-                            }
-                            else if(executors != null)
-                            {
-                                futures.add(executors.submit(callserve));
-                            }
-                        }
-                        catch (InstantiationException e)
-                        {
-                            logger.error("No nullary constructor found..");
-                        }
-                        catch (IllegalAccessException e)
-                        {
-                            logger.error("IllegalAccessException " + e.getMessage());
-                        }
-                    }
-                }
-                return futures;
-            }
-        };
-
+        EventProcessor mainpushcall = new EventProcessor(this, evtCls, evObj, eventSig);
         return internalExecutors.submit(mainpushcall);
-    }
-
-    private EventListenerSignature getSignature(Object event, int index)
-    {
-        if(eventListenerMap.get(event.getClass()) != null) {
-            List<EventListenerObject> eventListeners = eventListenerMap.get(event.getClass());
-            if(eventListeners.size()>index) {
-                EventListenerSignature signature = new EventListenerSignature();
-                signature.event = event;
-                signature.listenerClassName = eventListeners.get(index).eventListenerClass.getSimpleName();
-                signature.listenerMethodName = eventListeners.get(index).eventCallBackMethod.getName();
-                signature.eventClassName = event.getClass().getCanonicalName();
-                signature.distributed = eventPropertiesMap.get(event.getClass()).isDistributed;
-                return signature;
-            }
-        }
-        return null;
     }
 
     private ClearEventStatusHandler getClearStatusHandler(Future<List<Future>> futureoffs)
@@ -858,5 +778,261 @@ public class EventHandlerEngine
         ClearEventStatusHandler clStatusHandler = new ClearEventStatusHandler();
         clStatusHandler.futureoffs = futureoffs;
         return clStatusHandler;
+    }
+
+
+    /**
+     * Processes the events pushed to the event engine<br/>
+     * If it was an already existing event, it looks at the signature and makes sure all other
+     * listener callbacks are skipped<br/>
+     * @author Sumeet Chhetri<br/>
+     *
+     */
+    private static final class EventProcessor implements Callable<List<Future>>
+    {
+        private EventHandlerEngine eventEngine;
+
+        private Class evtCls;
+
+        private Object evObj;
+
+        private EventListenerSignature eventSig;
+
+        /**
+         * @param eventEngine
+         * @param evtCls
+         * @param evObj
+         * @param eventSig
+         */
+        private EventProcessor(EventHandlerEngine eventEngine, Class evtCls, Object evObj,
+                EventListenerSignature eventSig)
+        {
+            super();
+            this.eventEngine = eventEngine;
+            this.evtCls = evtCls;
+            this.evObj = evObj;
+            this.eventSig = eventSig;
+        }
+
+        public List<Future> call() throws Exception
+        {
+            List<Future> futures = new ArrayList<Future>();
+            final Class eventClas = eventSig!=null?eventSig.getEvent().getClass():evtCls;
+            final Object event = eventSig!=null?eventSig.getEvent():evObj;
+            if(eventEngine.eventListenerMap.get(eventClas) != null) {
+                List<EventListenerObject> eventListeners = eventEngine.eventListenerMap.get(eventClas);
+                for (int index = 0;index < eventListeners.size(); index++)
+                {
+                    final EventListenerObject eventListenerObject = eventListeners.get(index);
+
+                    if(!shouldProcessListenerCallback(eventSig, eventListenerObject)) {
+                        continue;
+                    }
+
+                    try
+                    {
+                        Object nfoInstance = null;
+                        if(eventListenerObject.eventListenerInstance==null && !eventListenerObject.isThreadSafe)
+                        {
+                            nfoInstance = eventListenerObject.eventListenerClass.newInstance();
+                        }
+                        else
+                        {
+                            nfoInstance = eventListenerObject.eventListenerInstance;
+                        }
+
+                        final Object oInstance = nfoInstance;
+                        final Method oCallbackMeth = eventListenerObject.eventCallBackMethod;
+
+                        final EventListenerSignature signature = eventSig!=null?eventSig:getSignature(event, index);
+
+                        if(eventEngine.eventPropertiesMap.get(eventClas).idempotent &&
+                                findDuplicate(signature, eventEngine.eventPropertiesMap.get(eventClas).expireTime))
+                        {
+                            logger.info("The event of type " + eventClas.getSimpleName() + " is marked as idempotent " +
+                                    "and a pending event alreay exists, hence skipping event....");
+                            break;
+                        }
+
+                        if(eventSig!=null) {
+                            signature.isLocked = true;
+                        }
+                        storeEvent(signature);
+
+                        Callable<Object> callserve = new Callable<Object>() {
+                            public Object call() throws Exception
+                            {
+                                Object result = null;
+                                try
+                                {
+                                    result = oCallbackMeth.invoke(oInstance, new Object[]{event});
+                                    if(!oCallbackMeth.getReturnType().equals(Void.class) && eventListenerObject.addResponseEvent)
+                                    {
+                                        eventEngine.push(oCallbackMeth.getReturnType(), result, null);
+                                    }
+                                }
+                                catch (IllegalArgumentException e)
+                                {
+                                    signature.error = ExceptionUtils.getStackTrace(e);
+                                    logger.error("Invalid argument passed to method " + eventListenerObject.eventListenerClass.getSimpleName()
+                                                    + "." + oCallbackMeth.getName());
+                                }
+                                catch (IllegalAccessException e)
+                                {
+                                    signature.error = ExceptionUtils.getStackTrace(e);
+                                    logger.error("IllegalAccessException " + e.getMessage());
+                                }
+                                catch (InvocationTargetException e)
+                                {
+                                    signature.error = ExceptionUtils.getStackTrace(e);
+                                    logger.error("Got exception while invoking method " + e.getMessage());
+                                }
+                                markEventDone(signature);
+                                return result;
+                            }
+                        };
+
+                        if(index+1<eventListeners.size()) {
+                            if(eventListenerObject.delayNextPriorityListener>0 &&
+                                    eventListenerObject.priority>eventListeners.get(index+1).priority) {
+                                Thread.sleep(eventListenerObject.delayNextPriorityListener);
+                            }
+                        }
+
+                        if(eventEngine.eventPropertiesMap.get(eventClas)!=null
+                                && eventEngine.eventPropertiesMap.get(eventClas).eventListenerExecutors!=null)
+                        {
+                            futures.add(eventEngine.eventPropertiesMap.get(eventClas).eventListenerExecutors.submit(callserve));
+                        }
+                        else if(eventListenerObject.eventListenerExecutors != null)
+                        {
+                            futures.add(eventListenerObject.eventListenerExecutors.submit(callserve));
+                        }
+                        else if(eventEngine.executors != null)
+                        {
+                            futures.add(eventEngine.executors.submit(callserve));
+                        }
+                    }
+                    catch (InstantiationException e)
+                    {
+                        logger.error("No nullary constructor found..");
+                    }
+                    catch (IllegalAccessException e)
+                    {
+                        logger.error("IllegalAccessException " + e.getMessage());
+                    }
+                }
+            }
+            return futures;
+        }
+
+        /**
+         * Check whether the event signature defines the listener correctly, if yes process only that listener callback
+         * otherwise skip oher callbacks
+         * @param eventSig
+         * @param eventListenerObject
+         * @return
+         */
+        private boolean shouldProcessListenerCallback(EventListenerSignature eventSig, EventListenerObject eventListenerObject)
+        {
+            if(eventSig!=null) {
+                if(eventSig.getListenerClassName()!=null && eventSig.getListenerMethodName()!=null) {
+                    if(!eventSig.getListenerClassName().equals(eventListenerObject.eventListenerClass.getSimpleName())
+                            || !eventSig.getListenerMethodName().equals(eventListenerObject.eventCallBackMethod.getName()))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+
+        /**
+         * Store the event in the event store
+         * @param signature
+         */
+        private void storeEvent(EventListenerSignature signature)
+        {
+            signature.dispatchDate = new Date();
+            if(signature.isDistributed()) {
+                signature.status = STATUS_PARTIAL;
+            } else {
+                signature.status = STATUS_PENDING;
+            }
+            signature.id = signature.event.getClass().getSimpleName() + UNDER_SCORE
+                    + eventEngine.getInstanceId() + UNDER_SCORE + System.nanoTime();
+            if(eventEngine.isPersistent()) {
+                eventEngine.ePersistenceInterface.storeEvent(signature);
+            } else {
+                eventEngine.eventMap.put(signature, true);
+            }
+        }
+
+        /**
+         * Mark the event as processed in the store
+         * @param signature
+         */
+        private void markEventDone(EventListenerSignature signature)
+        {
+            signature.status = signature.error==null?STATUS_SUCCESS:STATUS_FAILED;
+            signature.processedDate = new Date();
+            if(signature.instances==null) {
+                signature.instances = new ArrayList<String>();
+            }
+            signature.instances.add(eventEngine.instanceId);
+            if(signature.isDistributed() && !eventEngine.eventPropertiesMap.get(signature.getEvent().getClass()).isProcessOnce) {
+                signature.status = STATUS_PARTIAL;
+            }
+            signature.isLocked = false;
+            if(eventEngine.isPersistent()) {
+                eventEngine.ePersistenceInterface.storeEvent(signature);
+            } else {
+                eventEngine.eventMap.remove(signature);
+            }
+        }
+
+        /**
+         * Check if there are any duplicates for this event signature in the store
+         * @param signature
+         * @param expireTime
+         * @return
+         */
+        private boolean findDuplicate(EventListenerSignature signature, int expireTime)
+        {
+            if(eventEngine.isPersistent()) {
+                return eventEngine.ePersistenceInterface.findDuplicateEvents(signature, expireTime);
+            } else {
+                return eventEngine.eventMap.containsKey(signature);
+            }
+        }
+
+        /**
+         * Create the signature for this event
+         * @param event
+         * @param index
+         * @return
+         */
+        private EventListenerSignature getSignature(Object event, int index)
+        {
+            if(eventEngine.eventListenerMap.get(event.getClass()) != null) {
+                List<EventListenerObject> eventListeners = eventEngine.eventListenerMap.get(event.getClass());
+                if(eventListeners.size()>index) {
+                    EventListenerSignature signature = new EventListenerSignature();
+                    signature.event = event;
+                    signature.listenerClassName = eventListeners.get(index).eventListenerClass.getSimpleName();
+                    signature.listenerMethodName = eventListeners.get(index).eventCallBackMethod.getName();
+                    signature.eventClassName = event.getClass().getCanonicalName();
+                    signature.distributed = eventEngine.eventPropertiesMap.get(event.getClass()).isDistributed;
+                    signature.isLocked = false;
+                    if(eventEngine.eventPropertiesMap.get(event.getClass()).expireTime>0) {
+                        signature.canExpire = true;
+                    }
+                    return signature;
+                }
+            }
+            return null;
+        }
+
     }
 }

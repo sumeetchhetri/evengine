@@ -2,6 +2,7 @@ package com.evengine.store;
 
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 import com.evengine.core.EventListenerSignature;
 
@@ -23,8 +24,9 @@ import com.evengine.core.EventListenerSignature;
 @SuppressWarnings("rawtypes")
 public interface EventPersistenceInterface
 {
-    class LockStatus
+    public class LockStatus
     {
+        String id;
         boolean isLocked;
         String instanceId;
     }
@@ -35,5 +37,5 @@ public interface EventPersistenceInterface
     public boolean findDuplicateEvents(EventListenerSignature signature, int expireTime);
     public List<EventListenerSignature> getEvents(Class eventClass, Date startDate, boolean isDistributed, String instanceId, int expireTime, int limit);
     public long getEventsCount(Class eventClass, Date startDate, boolean isDistributed, String instanceId, int expireTime);
-    public void expireEvents(String evtClsName, String evtcollName, int expireTime);
+    public void expireEvents(Map<String, Integer> eventExpireMap);
 }
