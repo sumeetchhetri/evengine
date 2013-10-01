@@ -21,9 +21,48 @@ import java.util.List;
     limitations under the License.
 */
 
+/**
+ * The event listener signature that is persisted in the event store
+ * Exactly defines this event with status and the callback details
+ * @author Sumeet Chhetri<br/>
+ *
+ */
 @SuppressWarnings("serial")
 public class EventListenerSignature implements Serializable
 {
+    /**
+     * @param id
+     * @param event
+     * @param eventClassName
+     * @param listenerClassName
+     * @param listenerMethodName
+     * @param status
+     * @param dispatchDate
+     * @param processedDate
+     * @param error
+     * @param distributed
+     * @param instances
+     */
+    public EventListenerSignature(String id, Object event, String listenerClassName,
+            String listenerMethodName, String status, boolean distributed, List<String> instances,
+            boolean isCanExpire)
+    {
+        super();
+        this.id = id;
+        this.event = event;
+        this.eventClassName = event.getClass().getCanonicalName();
+        this.listenerClassName = listenerClassName;
+        this.listenerMethodName = listenerMethodName;
+        this.status = status;
+        this.dispatchDate = new Date();
+        this.distributed = distributed;
+        this.instances = instances;
+        this.canExpire = isCanExpire;
+    }
+    protected EventListenerSignature()
+    {
+
+    }
     String id;
     Object event;
     String eventClassName;
@@ -34,6 +73,8 @@ public class EventListenerSignature implements Serializable
     Date processedDate;
     String error;
     boolean distributed;
+    boolean isLocked;
+    boolean canExpire;
     List<String> instances = new ArrayList<String>();
     public String getStatus()
     {
@@ -83,15 +124,25 @@ public class EventListenerSignature implements Serializable
     {
         return distributed;
     }
+    public boolean isLocked()
+    {
+        return isLocked;
+    }
+
+    public boolean isCanExpire()
+    {
+        return canExpire;
+    }
     @Override
     public int hashCode()
     {
         final int prime = 31;
         int result = 1;
+        result = prime * result + (canExpire ? 1231 : 1237);
         result = prime * result + (distributed ? 1231 : 1237);
         result = prime * result + ((event == null) ? 0 : event.hashCode());
         result = prime * result + ((eventClassName == null) ? 0 : eventClassName.hashCode());
-        result = prime * result + ((instances == null) ? 0 : instances.hashCode());
+        result = prime * result + (isLocked ? 1231 : 1237);
         result = prime * result + ((listenerClassName == null) ? 0 : listenerClassName.hashCode());
         result = prime * result + ((listenerMethodName == null) ? 0 : listenerMethodName.hashCode());
         result = prime * result + ((status == null) ? 0 : status.hashCode());
@@ -107,6 +158,8 @@ public class EventListenerSignature implements Serializable
         if (getClass() != obj.getClass())
             return false;
         EventListenerSignature other = (EventListenerSignature) obj;
+        if (canExpire != other.canExpire)
+            return false;
         if (distributed != other.distributed)
             return false;
         if (event == null)
@@ -123,12 +176,7 @@ public class EventListenerSignature implements Serializable
         }
         else if (!eventClassName.equals(other.eventClassName))
             return false;
-        if (instances == null)
-        {
-            if (other.instances != null)
-                return false;
-        }
-        else if (!instances.equals(other.instances))
+        if (isLocked != other.isLocked)
             return false;
         if (listenerClassName == null)
         {
